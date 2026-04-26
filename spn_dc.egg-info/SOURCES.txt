@@ -1,0 +1,16 @@
+pyproject.toml
+spn_dc/__init__.py
+spn_dc/__main__.py
+spn_dc/difference.py
+spn_dc/linear.py
+spn_dc/propagation.py
+spn_dc/sbox.py
+spn_dc/spn.py
+spn_dc.egg-info/PKG-INFO
+spn_dc.egg-info/SOURCES.txt
+spn_dc.egg-info/dependency_links.txt
+spn_dc.egg-info/requires.txt
+spn_dc.egg-info/top_level.txt
+tests/test_linear.py
+tests/test_propagation.py
+tests/test_sbox.py
