@@ -11,9 +11,11 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+ui = ["streamlit>=1.28"]
 
 [project.scripts]
 spn-dc = "spn_dc.cli:main"
+spn-dc-ui = "spn_dc.launch_ui:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

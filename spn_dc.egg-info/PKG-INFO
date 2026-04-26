@@ -5,3 +5,5 @@ Summary: Differential propagation modeling for configurable SPNs
 Requires-Python: >=3.10
 Provides-Extra: dev
 Requires-Dist: pytest>=7.0; extra == "dev"
+Provides-Extra: ui
+Requires-Dist: streamlit>=1.28; extra == "ui"

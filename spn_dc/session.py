@@ -272,6 +272,36 @@ class SPNSession:
         self._equality_groups.append(tuple(positions))
         persist_session(self)
 
+    def replace_equality_groups(self, groups: tuple[tuple[int, ...], ...]) -> None:
+        """Replace all equality groups (e.g. from UI). Each group needs at least two indices."""
+        self._require_cipher()
+        for g in groups:
+            if len(g) < 2:
+                raise ValueError("each equality group needs at least two positions")
+            for p in g:
+                if p < 0 or p >= self._num_sboxes:
+                    raise IndexError("position out of range")
+        self._equality_groups = [tuple(x for x in g) for g in groups]
+        persist_session(self)
+
+    def reset_input_cells(self) -> None:
+        """Set every round-1 S-box input cell back to unconstrained (ANY)."""
+        self._require_cipher()
+        self._input_cells = [DiffCell.any_() for _ in range(self._num_sboxes)]
+        persist_session(self)
+
+    def set_input_any(self, position: int) -> None:
+        self._require_cipher()
+        if position < 0 or position >= self._num_sboxes:
+            raise IndexError("position out of range")
+        self._input_cells[position] = DiffCell.any_()
+        persist_session(self)
+
+    def clear_output_fixes(self) -> None:
+        self._require_cipher()
+        self._output_fix.clear()
+        persist_session(self)
+
     def _narrowed_round1_cells(self, packed_dx: int | None) -> tuple[DiffCell, ...] | str:
         return narrow_round1_cells(
             tuple(self._input_cells),

@@ -1,0 +1,3 @@
+[console_scripts]
+spn-dc = spn_dc.cli:main
+spn-dc-ui = spn_dc.launch_ui:main
