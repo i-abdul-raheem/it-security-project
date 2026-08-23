@@ -12,6 +12,9 @@ spn_dc/sbox.py
 spn_dc/session.py
 spn_dc/spn.py
 spn_dc/streamlit_app.py
+spn_dc/ui_diagram.py
+spn_dc/ui_permutation.py
+spn_dc/ui_viz.py
 spn_dc.egg-info/PKG-INFO
 spn_dc.egg-info/SOURCES.txt
 spn_dc.egg-info/dependency_links.txt
@@ -22,3 +25,6 @@ tests/test_linear.py
 tests/test_propagation.py
 tests/test_sbox.py
 tests/test_session.py
+tests/test_ui_diagram.py
+tests/test_ui_permutation.py
+tests/test_ui_viz.py

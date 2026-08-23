@@ -9,16 +9,35 @@ Run from the project root:
 from __future__ import annotations
 
 import os
+import time
 
 # Keep UI session separate from CLI on-disk state by default.
 os.environ.setdefault("SPN_DC_NO_PERSIST", "1")
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from spn_dc.difference import DiffKind
 from spn_dc.linear import identity_matrix
 from spn_dc.parsing import parse_int_list, parse_mapping, parse_matrix_rows
 from spn_dc.session import SPNSession, random_bijective_matrix, random_sbox
+from spn_dc.ui_diagram import render_frame_bit_diagram_svg, render_spn_bit_diagram_svg
+from spn_dc.ui_permutation import (
+    bit_permutation_wiring,
+    is_pure_bit_permutation,
+    p_matrix_bit_grid,
+    p_row_descriptions,
+    render_bit_perm_wiring_svg,
+    render_p_matrix_svg,
+    render_sbox_permutation_svg,
+    sbox_mapping_rows,
+)
+from spn_dc.ui_viz import (
+    PropFrame,
+    frames_from_path_trace,
+    frames_from_trail,
+    render_propagation_frame_html,
+)
 
 
 def _input_mode_index(cell) -> int:
@@ -54,13 +73,175 @@ def _parse_equality_groups(text: str) -> tuple[tuple[int, ...], ...]:
     return tuple(groups)
 
 
-def _format_round_sets(st) -> None:
+def _format_round_sets(round_state) -> None:
+    """`round_state` must be a RoundSetState; name avoids shadowing Streamlit's `st`."""
     st.markdown("**Before S-box**")
-    st.json({str(i): sorted(s) for i, s in enumerate(st.before_sbox)})
+    st.json({str(i): sorted(s) for i, s in enumerate(round_state.before_sbox)})
     st.markdown("**After S-box**")
-    st.json({str(i): sorted(s) for i, s in enumerate(st.after_sbox)})
+    st.json({str(i): sorted(s) for i, s in enumerate(round_state.after_sbox)})
     st.markdown("**After P**")
-    st.json({str(i): sorted(s) for i, s in enumerate(st.after_p)})
+    st.json({str(i): sorted(s) for i, s in enumerate(round_state.after_p)})
+
+
+def _store_viz_frames(frames: tuple[PropFrame, ...], sbox_bits: int, source: str) -> None:
+    st.session_state.viz_frames = frames
+    st.session_state.viz_sbox_bits = sbox_bits
+    st.session_state.viz_source = source
+    st.session_state.viz_step = 0
+
+
+def _clear_viz_state() -> None:
+    """Drop animation data derived from the previous cipher configuration."""
+    for key in (
+        "viz_frames",
+        "viz_sbox_bits",
+        "viz_source",
+        "viz_step",
+        "viz_current_step",
+        "prop_trail",
+    ):
+        st.session_state.pop(key, None)
+
+
+def _diagram_height(num_bits: int) -> int:
+    step = max(16, min(24, 520 // max(num_bits, 1)))
+    return int(max(300, min(920, (num_bits - 1) * step + 160)))
+
+
+def _show_bit_diagram_svg(svg: str, *, num_bits: int) -> None:
+    components.html(
+        f'<div style="overflow:auto;width:100%">{svg}</div>',
+        height=_diagram_height(num_bits),
+        scrolling=True,
+    )
+
+
+def _show_perm_svg(svg: str, *, height: int) -> None:
+    components.html(
+        f'<div style="overflow:auto;width:100%">{svg}</div>',
+        height=height,
+        scrolling=True,
+    )
+
+
+def _render_bit_diagram(sess: SPNSession, frame: PropFrame | None = None) -> None:
+    if not sess._p or not sess._sboxes:
+        return
+    n = sess._num_sboxes * sess._sbox_bits
+    if frame is None:
+        svg = render_spn_bit_diagram_svg(
+            num_sboxes=sess._num_sboxes,
+            sbox_bits=sess._sbox_bits,
+            p_rows=sess._p.rows,
+            title="Cipher wiring (all S-boxes, bit pins, P connections)",
+        )
+    else:
+        if len(frame.slices) != sess._num_sboxes:
+            st.warning(
+                "This animation belongs to an earlier cipher configuration. "
+                "Run propagation or generate a path again."
+            )
+            return
+        svg = render_frame_bit_diagram_svg(
+            num_sboxes=sess._num_sboxes,
+            sbox_bits=sess._sbox_bits,
+            p_rows=sess._p.rows,
+            layer=frame.layer,
+            slices=frame.slices,
+            round_index=frame.round_index,
+            layer_title=frame.layer_title,
+        )
+    _show_bit_diagram_svg(svg, num_bits=n)
+
+
+def _render_propagation_animation(*, key_prefix: str = "viz", sess: SPNSession | None = None) -> None:
+    frames: tuple[PropFrame, ...] | None = st.session_state.get("viz_frames")
+    if not frames:
+        return
+    bits = int(st.session_state.get("viz_sbox_bits", 4))
+    if sess is not None and (
+        bits != sess._sbox_bits
+        or any(len(frame.slices) != sess._num_sboxes for frame in frames)
+    ):
+        _clear_viz_state()
+        st.warning(
+            "The saved animation was cleared because the cipher configuration changed. "
+            "Run propagation or generate a path again."
+        )
+        return
+    source = st.session_state.get("viz_source", "propagation")
+    total = len(frames)
+
+    st.markdown("### Animated propagation")
+    st.caption(f"Source: **{source}** · {total} steps (3 per round: before S-box → after S-box → after P)")
+
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
+        delay = st.slider(
+            "Seconds per step",
+            min_value=0.15,
+            max_value=2.5,
+            value=0.65,
+            step=0.05,
+            key=f"{key_prefix}_delay",
+        )
+    with c2:
+        play = st.button("▶ Play animation", key=f"{key_prefix}_play", type="primary")
+    with c3:
+        loop = st.checkbox("Loop once more after finish", value=False, key=f"{key_prefix}_loop")
+
+    slider_key = f"{key_prefix}_step"
+    pending_key = f"{key_prefix}_pending_step"
+    # Apply deferred scrub position *before* the slider widget is created.
+    if pending_key in st.session_state:
+        st.session_state[slider_key] = int(st.session_state.pop(pending_key))
+    step = st.slider(
+        "Scrub step",
+        min_value=0,
+        max_value=total - 1,
+        key=slider_key,
+    )
+
+    viz_slot = st.empty()
+    bit_slot = st.empty()
+    progress_slot = st.empty()
+
+    def _draw(ix: int, *, pulse: bool) -> None:
+        html_block = render_propagation_frame_html(
+            frames[ix],
+            sbox_bits=bits,
+            frame_index=ix,
+            total_frames=total,
+            pulse=pulse,
+        )
+        viz_slot.markdown(html_block, unsafe_allow_html=True)
+        if sess is not None:
+            with bit_slot.container():
+                st.markdown("#### Bit pins, S-boxes & P wiring")
+                _render_bit_diagram(sess, frames[ix])
+
+    if play:
+        runs = 2 if loop else 1
+        for _ in range(runs):
+            prog = progress_slot.progress(0.0, text="Animating…")
+            for ix in range(total):
+                _draw(ix, pulse=True)
+                prog.progress((ix + 1) / total, text=f"Step {ix + 1} / {total}")
+                time.sleep(delay)
+            time.sleep(0.25)
+        progress_slot.empty()
+        _draw(total - 1, pulse=False)
+        # Cannot assign slider_key after the slider exists; queue for next run.
+        st.session_state[pending_key] = total - 1
+        st.session_state["viz_current_step"] = total - 1
+        st.rerun()
+    else:
+        _draw(step, pulse=False)
+        st.session_state["viz_current_step"] = step
+
+    show_ix = int(st.session_state.get("viz_current_step", step))
+    with st.expander("Raw set data (current step)", expanded=False):
+        st.json({str(i): sorted(s) for i, s in enumerate(frames[show_ix].slices)})
 
 
 def main() -> None:
@@ -77,9 +258,11 @@ def main() -> None:
         sbox_bits = st.number_input("Bits per S-box", min_value=1, max_value=8, value=4, step=1)
         if st.button("Create / reset cipher", type="primary"):
             sess.create_spn(int(rounds), int(num_sb), int(sbox_bits))
+            _clear_viz_state()
             st.success("Cipher initialized (identity S-boxes + identity P).")
         if st.button("Full reset (clear cipher)"):
             sess.reset()
+            _clear_viz_state()
             st.session_state.pop("spn", None)
             st.success("Cleared.")
         if st.button("Random P-layer"):
@@ -99,7 +282,16 @@ def main() -> None:
 
     dim = sess._num_sboxes * sess._sbox_bits
     tabs = st.tabs(
-        ["S-boxes & P", "DDT", "Input & constraints", "Propagate", "Paths", "Check constraints"]
+        [
+            "S-boxes & P",
+            "Permutations",
+            "DDT",
+            "Input & constraints",
+            "Propagate",
+            "Paths",
+            "Check constraints",
+            "Bit wiring",
+        ]
     )
 
     with tabs[0]:
@@ -145,12 +337,74 @@ def main() -> None:
                 st.success("P set to identity.")
 
     with tabs[1]:
-        sid = st.selectbox("S-box index", list(range(sess._num_sboxes)))
+        st.subheader("Permutation views")
+        st.caption(
+            "An **S-box** is a permutation on 2^n values. The **P-layer** is an invertible GF(2) matrix "
+            "(a bit permutation when each row has exactly one `1`)."
+        )
+        ptab_sb, ptab_p = st.tabs(["S-box permutations", "P-layer connections"])
+
+        with ptab_sb:
+            sid = st.selectbox("S-box", list(range(sess._num_sboxes)), key="perm_sbox_id")
+            sb = sess._sboxes[sid]
+            bits = sess._sbox_bits
+            st.markdown(f"**S{sid}** — {bits}-bit permutation ({len(sb.table)} entries)")
+            st.dataframe(
+                sbox_mapping_rows(sb.table, bits),
+                use_container_width=True,
+                height=min(420, 40 + len(sb.table) * 22),
+            )
+            if len(sb.table) <= 64:
+                h = max(140, 28 + len(sb.table) * 16)
+                _show_perm_svg(
+                    render_sbox_permutation_svg(
+                        sb.table, bits, title=f"S{sid}: wire x -> S(x)"
+                    ),
+                    height=h,
+                )
+            else:
+                st.info("Braid diagram hidden for large S-boxes; use the table above.")
+
+        with ptab_p:
+            if sess._p is None:
+                st.warning("No P-layer configured.")
+            else:
+                rows = sess._p.rows
+                n = len(rows)
+                cols = [f"x{j}" for j in range(n)]
+                idx = [f"y{i}" for i in range(n)]
+                st.markdown("**Matrix M** — `M[y,x] = 1` means output bit y XORs input bit x")
+                st.dataframe(
+                    {cols[j]: [p_matrix_bit_grid(rows)[i][j] for i in range(n)] for j in range(n)},
+                    use_container_width=True,
+                    height=min(500, 40 + n * 24),
+                )
+                cell = 14 if n > 12 else 22
+                _show_perm_svg(
+                    render_p_matrix_svg(rows, title="P-layer heatmap (1 = connected)"),
+                    height=min(520, 60 + n * cell),
+                )
+                if is_pure_bit_permutation(rows):
+                    st.success("This P-layer is a **pure bit permutation** (wire shuffle).")
+                    pairs = bit_permutation_wiring(rows)
+                    st.write("Wiring:", ", ".join(f"x{inp}->y{out}" for inp, out in pairs))
+                    _show_perm_svg(
+                        render_bit_perm_wiring_svg(rows),
+                        height=max(120, 24 + n * 18),
+                    )
+                else:
+                    st.info("General linear mix: each output bit XORs **several** input bits.")
+                with st.expander("Row equations (GF(2))"):
+                    for line in p_row_descriptions(rows):
+                        st.code(line, language=None)
+
+    with tabs[2]:
+        sid = st.selectbox("S-box index", list(range(sess._num_sboxes)), key="ddt_sbox_id")
         if st.button("Show DDT"):
             ddt = sess.compute_ddt(sid)
             st.dataframe(list(ddt), use_container_width=True, height=min(600, 40 + len(ddt) * 28))
 
-    with tabs[2]:
+    with tabs[3]:
         st.subheader("Round-1 input cells")
         st.caption("Per position: Any · fixed value · abstract (nonzero unknown) · round-1 output fix.")
         cols = st.columns(sess._num_sboxes)
@@ -231,7 +485,7 @@ def main() -> None:
             sess.clear_output_fixes()
             st.success("Output fixes cleared.")
 
-    with tabs[3]:
+    with tabs[4]:
         st.subheader("Propagate packed difference")
         packed = st.text_input("Packed Δx (hex or decimal)", value="0x11")
         if st.button("Propagate", type="primary"):
@@ -244,11 +498,20 @@ def main() -> None:
                 if err:
                     st.error(err)
                 else:
-                    for ri, stt in enumerate(trail):
-                        with st.expander(f"Round {ri + 1}", expanded=(ri == 0)):
-                            _format_round_sets(stt)
+                    st.session_state.prop_trail = trail
+                    _store_viz_frames(frames_from_trail(trail), sess._sbox_bits, f"Δx = {packed}")
+                    st.success(f"Propagated through {len(trail)} round(s). Use the animation below.")
+        if st.session_state.get("viz_frames"):
+            _render_propagation_animation(key_prefix="prop", sess=sess)
+            prop_trail = st.session_state.get("prop_trail")
+            if prop_trail:
+                st.divider()
+                st.markdown("**All rounds (detail)**")
+                for ri, stt in enumerate(prop_trail):
+                    with st.expander(f"Round {ri + 1}", expanded=False):
+                        _format_round_sets(stt)
 
-    with tabs[4]:
+    with tabs[5]:
         st.subheader("Enumerate differential trails")
         p_in = st.text_input("Packed input difference", value="0x11", key="path_in")
         cap = st.number_input("Max paths", min_value=1, max_value=200_000, value=10_000, step=1000)
@@ -274,25 +537,84 @@ def main() -> None:
                 except Exception as e:
                     st.error(str(e))
             pool = list(sess._paths_filtered) if sess._paths_filtered is not None else list(sess._paths)
-            labels = [f"id={p.path_id}  p={p.probability:.4g}" for p in pool]
-            choice = st.selectbox("Select trail", range(len(pool)), format_func=lambda i: labels[i])
-            if pool:
+            if not pool:
+                st.warning(
+                    "No trails match the current probability filter. "
+                    "Set the threshold lower and click **Apply filter**, or generate paths again."
+                )
+            else:
+                labels = [f"id={p.path_id}  p={p.probability:.4g}" for p in pool]
+                choice = st.selectbox("Select trail", range(len(pool)), format_func=lambda i: labels[i])
                 p = pool[int(choice)]
                 st.markdown(f"**Probability:** `{p.probability}`")
-                for ri, step in enumerate(p.trace):
-                    b, a, z = step
-                    st.markdown(f"**Round {ri + 1}**  before={list(b)}  after S-box={list(a)}  after P={list(z)}")
+                st.markdown("**Round-by-round difference permutations**")
+                st.dataframe(
+                    [
+                        {
+                            "round": ri,
+                            "before S-box": " ".join(f"{v:X}" for v in before),
+                            "after S-box": " ".join(f"{v:X}" for v in after_sbox),
+                            "after P": " ".join(f"{v:X}" for v in after_p),
+                        }
+                        for ri, (before, after_sbox, after_p) in enumerate(p.trace, start=1)
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                if st.button("Animate this trail", key="path_animate"):
+                    _store_viz_frames(
+                        frames_from_path_trace(p.trace),
+                        sess._sbox_bits,
+                        f"path id={p.path_id}  p={p.probability:.4g}",
+                    )
+                    st.session_state.prop_trail = None
+                    st.success("Trail loaded — animation below.")
+                if st.session_state.get("viz_source", "").startswith("path id"):
+                    _render_propagation_animation(key_prefix="path", sess=sess)
 
-    with tabs[5]:
+    with tabs[6]:
         if st.button("Run constraint check", type="primary"):
             trail, err = sess.check_constraints()
             if err:
+                if st.session_state.get("viz_source") == "constraint check":
+                    _clear_viz_state()
                 st.error(err)
             else:
+                st.session_state.prop_trail = trail
+                _store_viz_frames(frames_from_trail(trail), sess._sbox_bits, "constraint check")
                 st.success("All constraints are compatible with propagation.")
-                for ri, stt in enumerate(trail):
+
+        # Keep this outside the button branch: every animation control causes a
+        # Streamlit rerun, while the generated frames live in session state.
+        if st.session_state.get("viz_source") == "constraint check":
+            _render_propagation_animation(key_prefix="chk", sess=sess)
+            constraint_trail = st.session_state.get("prop_trail")
+            if constraint_trail:
+                st.divider()
+                st.markdown("**Constraint-compatible rounds (detail)**")
+                for ri, stt in enumerate(constraint_trail):
                     with st.expander(f"Round {ri + 1}"):
                         _format_round_sets(stt)
+
+    with tabs[7]:
+        st.subheader("Bit-level network diagram")
+        st.caption(
+            "Each pin **b0…b{n−1}** is one bit of the block (slice 0 = lowest bits). "
+            "Wires: input → S-box → after-S bus → **P** (curves: output bit o XORs every input i with M[o,i]=1)."
+        )
+        frames = st.session_state.get("viz_frames")
+        if frames:
+            step = st.slider(
+                "Highlight propagation step",
+                0,
+                len(frames) - 1,
+                int(st.session_state.get("viz_current_step", 0)),
+                key="bitwiz_step",
+            )
+            _render_bit_diagram(sess, frames[step])
+        else:
+            _render_bit_diagram(sess, None)
+            st.info("Run **Propagate** or **Check constraints** to color active bit pins per layer.")
 
 
 if __name__ == "__main__":
