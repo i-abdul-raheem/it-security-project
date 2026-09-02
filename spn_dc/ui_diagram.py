@@ -237,7 +237,6 @@ def render_spn_bit_diagram_svg(
     for o_bit in range(n):
         y_o = y_pin(o_bit)
         connected = [i_bit for i_bit in range(n) if _matrix_connects(p_rows, o_bit, i_bit)]
-        any_active = bool(connected) and active_layer == "after_p"
         for i_bit in connected:
             y_i = y_pin(i_bit)
             p_active = active_layer == "after_p"

@@ -56,7 +56,7 @@ def persist_enabled() -> bool:
     return os.environ.get("SPN_DC_NO_PERSIST", "").lower() not in ("1", "true", "yes")
 
 
-def persist_session(sess: "SPNSession") -> None:
+def persist_session(sess: SPNSession) -> None:
     if not persist_enabled():
         return
     p = state_file_path()
@@ -194,13 +194,15 @@ class SPNSession:
         s._paths_filtered = None
         return s
 
-    def _require_cipher(self) -> None:
-        if not self._sboxes or self._p is None:
+    def _require_cipher(self) -> BinaryMatrix:
+        p_layer = self._p
+        if not self._sboxes or p_layer is None:
             raise RuntimeError("call create_spn first")
+        return p_layer
 
     def round_spec(self) -> SPNRoundSpec:
-        self._require_cipher()
-        return SPNRoundSpec(tuple(self._sboxes), self._p)
+        p_layer = self._require_cipher()
+        return SPNRoundSpec(tuple(self._sboxes), p_layer)
 
     def params(self) -> SPNParams:
         return SPNParams(self._rounds, self.round_spec())

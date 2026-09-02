@@ -9,7 +9,6 @@ def _validate_bijection(table: tuple[int, ...]) -> None:
     n = len(table)
     if n == 0 or (n & (n - 1)) != 0:
         raise ValueError("S-box length must be a positive power of two")
-    bits = n.bit_length() - 1
     seen = [False] * n
     for v in table:
         if v < 0 or v >= n or seen[v]:
