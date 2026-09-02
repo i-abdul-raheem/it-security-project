@@ -123,6 +123,11 @@ class SPNSession:
     _paths: tuple[DifferentialPath, ...] = ()
     _paths_filtered: tuple[DifferentialPath, ...] | None = None
 
+    def _invalidate_paths(self) -> None:
+        """Discard trails whenever cipher or constraint inputs change."""
+        self._paths = ()
+        self._paths_filtered = None
+
     def reset(self) -> None:
         self._rounds = 0
         self._num_sboxes = 0
@@ -210,6 +215,7 @@ class SPNSession:
         if sb.bits != self._sbox_bits:
             raise ValueError(f"S-box width is {sb.bits} bits but cipher uses {self._sbox_bits} bits per S-box")
         self._sboxes[index] = sb
+        self._invalidate_paths()
         persist_session(self)
 
     def set_permutation(self, matrix: tuple[int, ...] | list[int] | str) -> None:
@@ -222,6 +228,7 @@ class SPNSession:
         if len(rows) != dim:
             raise ValueError(f"expected {dim} row masks for P-layer, got {len(rows)}")
         self._p = BinaryMatrix(dim, tuple(rows))
+        self._invalidate_paths()
         persist_session(self)
 
     def compute_ddt(self, sbox_id: int) -> tuple[tuple[int, ...], ...]:
@@ -238,6 +245,7 @@ class SPNSession:
         if not 0 <= value < n:
             raise ValueError("difference value out of range")
         self._input_cells[position] = DiffCell.concrete(value)
+        self._invalidate_paths()
         persist_session(self)
 
     def fix_output_difference(self, position: int, value: int) -> None:
@@ -248,6 +256,7 @@ class SPNSession:
         if not 0 <= value < n:
             raise ValueError("difference value out of range")
         self._output_fix[position] = value
+        self._invalidate_paths()
         persist_session(self)
 
     def set_abstract_difference(self, position: int) -> None:
@@ -255,6 +264,7 @@ class SPNSession:
         if position < 0 or position >= self._num_sboxes:
             raise IndexError("position out of range")
         self._input_cells[position] = DiffCell.nonzero()
+        self._invalidate_paths()
         persist_session(self)
 
     def set_constraint(self, typ: str, positions: tuple[int, ...]) -> None:
@@ -270,6 +280,7 @@ class SPNSession:
             if p < 0 or p >= self._num_sboxes:
                 raise IndexError("position out of range")
         self._equality_groups.append(tuple(positions))
+        self._invalidate_paths()
         persist_session(self)
 
     def replace_equality_groups(self, groups: tuple[tuple[int, ...], ...]) -> None:
@@ -282,12 +293,14 @@ class SPNSession:
                 if p < 0 or p >= self._num_sboxes:
                     raise IndexError("position out of range")
         self._equality_groups = [tuple(x for x in g) for g in groups]
+        self._invalidate_paths()
         persist_session(self)
 
     def reset_input_cells(self) -> None:
         """Set every round-1 S-box input cell back to unconstrained (ANY)."""
         self._require_cipher()
         self._input_cells = [DiffCell.any_() for _ in range(self._num_sboxes)]
+        self._invalidate_paths()
         persist_session(self)
 
     def set_input_any(self, position: int) -> None:
@@ -295,11 +308,13 @@ class SPNSession:
         if position < 0 or position >= self._num_sboxes:
             raise IndexError("position out of range")
         self._input_cells[position] = DiffCell.any_()
+        self._invalidate_paths()
         persist_session(self)
 
     def clear_output_fixes(self) -> None:
         self._require_cipher()
         self._output_fix.clear()
+        self._invalidate_paths()
         persist_session(self)
 
     def _narrowed_round1_cells(self, packed_dx: int | None) -> tuple[DiffCell, ...] | str:

@@ -49,11 +49,29 @@ def _matrix_connects(p_rows: tuple[int, ...], out_bit: int, in_bit: int) -> bool
     return bool((p_rows[out_bit] >> in_bit) & 1)
 
 
+def sbox_bit_dependencies(table: Sequence[int], bits: int) -> list[tuple[int, int]]:
+    """Return (input bit, output bit) influence edges for an S-box truth table.
+
+    An edge means that flipping the input bit changes that output bit for at
+    least one input value. It is an influence relation, not a linear mapping.
+    """
+    if bits < 1 or len(table) != 1 << bits:
+        raise ValueError("S-box table length must equal 2**bits")
+    edges: list[tuple[int, int]] = []
+    for input_bit in range(bits):
+        flip = 1 << input_bit
+        for output_bit in range(bits):
+            if any(((int(table[x]) ^ int(table[x ^ flip])) >> output_bit) & 1 for x in range(1 << bits)):
+                edges.append((input_bit, output_bit))
+    return edges
+
+
 def render_spn_bit_diagram_svg(
     *,
     num_sboxes: int,
     sbox_bits: int,
     p_rows: tuple[int, ...],
+    sbox_tables: Sequence[Sequence[int]] | None = None,
     input_states: Sequence[str] | None = None,
     post_s_states: Sequence[str] | None = None,
     output_states: Sequence[str] | None = None,
@@ -69,6 +87,8 @@ def render_spn_bit_diagram_svg(
     n = num_sboxes * sbox_bits
     if len(p_rows) != n:
         raise ValueError("P-layer row count must equal total block bits")
+    if sbox_tables is not None and len(sbox_tables) != num_sboxes:
+        raise ValueError("S-box table count must match number of S-boxes")
 
     def _states(seq: Sequence[str] | None) -> list[str]:
         if seq is None:
@@ -165,6 +185,33 @@ def render_spn_bit_diagram_svg(
             f'<text x="{(x_sb_in + x_sb_out)/2}" y="{y_top + 14}" text-anchor="middle" '
             f'font-size="11" font-weight="700" fill="#4338ca">S{si}</text>'
         )
+        if sbox_tables is not None:
+            table = sbox_tables[si]
+            preview = " ".join(f"{x:X}→{int(table[x]):X}" for x in range(min(3, len(table))))
+            parts.append(
+                f'<text x="{(x_sb_in + x_sb_out)/2}" y="{y_top + 27}" text-anchor="middle" '
+                f'font-size="7" fill="#64748b">{html.escape(preview)}</text>'
+            )
+            # Unlike a P-layer, an S-box has no fixed bit-to-bit wiring.
+            # Draw its real Boolean influence relations as curved connections.
+            for input_bit, output_bit in sbox_bit_dependencies(table, sbox_bits):
+                input_y = y_pin(g0 + input_bit)
+                output_y = y_pin(g0 + output_bit)
+                active = active_layer == "after_sbox"
+                color = "#4f46e5" if active else "#a5b4fc"
+                opacity = 0.55 if active else 0.22
+                parts.append(
+                    f'<path data-sbox-dependency="S{si}:{input_bit}-{output_bit}" '
+                    f'd="M{x_sb_in - 8},{input_y} C{x_sb_in + 28},{input_y} '
+                    f'{x_sb_out - 38},{output_y} {x_sb_out},{output_y}" fill="none" '
+                    f'stroke="{color}" stroke-width="{1.4 if active else 0.7}" opacity="{opacity}">'
+                    f'<title>S{si}: input bit {input_bit} can influence output bit {output_bit}</title></path>'
+                )
+        else:
+            parts.append(
+                f'<text x="{(x_sb_in + x_sb_out)/2}" y="{(y_top + y_bot)/2 + 4}" '
+                f'text-anchor="middle" font-size="16" font-weight="700" fill="#6366f1">S</text>'
+            )
         for local in range(sbox_bits):
             g = g0 + local
             cy = y_pin(g)
@@ -175,39 +222,41 @@ def render_spn_bit_diagram_svg(
             draw_pin(x_in, cy, inp[g], glow=in_glow)
             # wire in -> S-box
             draw_wire(x_in + 7, cy, x_sb_in - 8, cy, active=in_glow)
-            # S-box output pin (same row = bit lane through substitution)
+            # Output pin. There is deliberately no straight internal lane:
+            # nonlinear S-box output bits may depend on several input bits.
             draw_pin(x_sb_out, cy, post[g], glow=post_glow)
-            draw_wire(x_sb_in + 8, cy, x_sb_out - 7, cy, active=post_glow)
             # post-S bus pin
             draw_pin(x_post, cy, post[g], glow=post_glow)
             draw_wire(x_sb_out + 7, cy, x_post - 7, cy, active=post_glow)
             # output pin
             draw_pin(x_out, cy, out[g], glow=out_glow)
 
-    # P-layer cross-connections (output o <- XOR inputs i where M[o,i]=1)
+    # P-layer cross-connections (output o <- XOR inputs i where M[o,i]=1).
+    # General matrix rows terminate at an explicit XOR node so the drawing does
+    # not imply that several independent wires can directly drive one output.
     for o_bit in range(n):
         y_o = y_pin(o_bit)
-        any_active = False
-        for i_bit in range(n):
-            if not _matrix_connects(p_rows, o_bit, i_bit):
-                continue
+        connected = [i_bit for i_bit in range(n) if _matrix_connects(p_rows, o_bit, i_bit)]
+        any_active = bool(connected) and active_layer == "after_p"
+        for i_bit in connected:
             y_i = y_pin(i_bit)
             p_active = active_layer == "after_p"
-            if p_active:
-                any_active = True
-            # curved wire post -> P hub -> out
+            # Curved inputs converge on the row's XOR/copy node.
             mx = x_p
-            path = (
-                f"M{x_post + 7},{y_i} C{mx},{y_i} {mx},{y_o} {x_out - 7},{y_o}"
-            )
+            path = f"M{x_post + 7},{y_i} C{x_post + 75},{y_i} {mx - 30},{y_o} {mx},{y_o}"
             col = "#7c3aed" if p_active else "#c4b5fd"
             sw = 1.8 if p_active else 0.7
             op = 0.85 if p_active else 0.35
             parts.append(
                 f'<path d="{path}" fill="none" stroke="{col}" stroke-width="{sw}" opacity="{op}"/>'
             )
-        if active_layer == "after_p" and any_active:
-            parts.append(f'<circle cx="{x_p}" cy="{y_o}" r="3" fill="#7c3aed" opacity="0.5"/>')
+        if connected:
+            p_active = active_layer == "after_p"
+            fill = "#7c3aed" if p_active else "#ede9fe"
+            stroke = "#6d28d9" if p_active else "#a78bfa"
+            parts.append(f'<circle cx="{x_p}" cy="{y_o}" r="8" fill="{fill}" stroke="{stroke}"/>')
+            parts.append(f'<text x="{x_p}" y="{y_o + 4}" text-anchor="middle" font-size="10" font-weight="700" fill="{ "#fff" if p_active else "#6d28d9"}">{"⊕" if len(connected) > 1 else "="}</text>')
+            draw_wire(x_p + 8, y_o, x_out - 7, y_o, active=p_active)
 
     # Legend
     ly = height - 28
@@ -231,6 +280,7 @@ def render_frame_bit_diagram_svg(
     num_sboxes: int,
     sbox_bits: int,
     p_rows: tuple[int, ...],
+    sbox_tables: Sequence[Sequence[int]] | None = None,
     layer: str,
     slices: tuple[FrozenSet[int], ...],
     round_index: int,
@@ -249,9 +299,72 @@ def render_frame_bit_diagram_svg(
         num_sboxes=num_sboxes,
         sbox_bits=sbox_bits,
         p_rows=p_rows,
+        sbox_tables=sbox_tables,
         input_states=inp,
         post_s_states=post,
         output_states=out,
         active_layer=layer,
         title=f"Round {round_index} · {layer_title}",
     )
+
+
+def render_sbox_to_p_layer_svg(
+    *,
+    num_sboxes: int,
+    sbox_bits: int,
+    p_rows: tuple[int, ...],
+    title: str = "S-box outputs → P-layer",
+) -> str:
+    """Dedicated wiring view from after-S bit pins into P output equations."""
+    n = num_sboxes * sbox_bits
+    if num_sboxes < 1 or sbox_bits < 1 or len(p_rows) != n:
+        raise ValueError("P-layer dimension must match the S-box output width")
+    palette = ("#4f46e5", "#db2777", "#059669", "#d97706", "#0891b2", "#7c3aed")
+    step = max(22, min(32, 650 // max(1, n)))
+    top = 58
+    height = top + (n - 1) * step + 75
+    width = 920
+    x_pin, x_gate, x_out = 160, 650, 805
+
+    def y(bit: int) -> float:
+        return top + bit * step
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" style="font-family:system-ui,sans-serif">',
+        f'<text x="{width / 2}" y="20" text-anchor="middle" font-size="14" font-weight="700" '
+        f'fill="#1e293b">{html.escape(title)}</text>',
+        '<text x="160" y="40" text-anchor="middle" font-size="10" fill="#64748b">after-S bits / P inputs</text>',
+        '<text x="650" y="40" text-anchor="middle" font-size="10" fill="#64748b">P row operation</text>',
+        '<text x="805" y="40" text-anchor="middle" font-size="10" fill="#64748b">after-P bits</text>',
+    ]
+    for source_bit in range(n):
+        source_sbox, local_bit = divmod(source_bit, sbox_bits)
+        cy = y(source_bit)
+        color = palette[source_sbox % len(palette)]
+        parts.append(f'<circle cx="{x_pin}" cy="{cy}" r="6" fill="{color}"/>')
+        parts.append(
+            f'<text x="{x_pin - 12}" y="{cy + 4}" text-anchor="end" font-size="9" '
+            f'font-weight="700" fill="{color}">S{source_sbox}.o{local_bit} (b{source_bit})</text>'
+        )
+    for output_bit, row in enumerate(p_rows):
+        cy = y(output_bit)
+        inputs = [bit for bit in range(n) if (row >> bit) & 1]
+        for source_bit in inputs:
+            source_sbox = source_bit // sbox_bits
+            color = palette[source_sbox % len(palette)]
+            parts.append(
+                f'<path d="M{x_pin + 6},{y(source_bit)} C350,{y(source_bit)} 475,{cy} {x_gate - 10},{cy}" '
+                f'fill="none" stroke="{color}" stroke-width="1.5" opacity="0.68">'
+                f'<title>S{source_sbox}.o{source_bit % sbox_bits} → P input b{source_bit} → y{output_bit}</title></path>'
+            )
+        symbol = "⊕" if len(inputs) > 1 else "="
+        parts.append(f'<circle cx="{x_gate}" cy="{cy}" r="10" fill="#f3e8ff" stroke="#7c3aed" stroke-width="1.5"/>')
+        parts.append(f'<text x="{x_gate}" y="{cy + 4}" text-anchor="middle" font-size="11" font-weight="700" fill="#6d28d9">{symbol}</text>')
+        parts.append(f'<line x1="{x_gate + 10}" y1="{cy}" x2="{x_out - 7}" y2="{cy}" stroke="#7c3aed" stroke-width="1.5"/>')
+        parts.append(f'<circle cx="{x_out}" cy="{cy}" r="6" fill="#ede9fe" stroke="#7c3aed"/>')
+        expression = " ⊕ ".join(f"b{bit}" for bit in inputs)
+        parts.append(f'<text x="{x_out + 12}" y="{cy + 4}" font-size="9" fill="#475569">y{output_bit} = {html.escape(expression)}</text>')
+    parts.append('<text x="30" y="{0}" font-size="9" fill="#64748b">Wire color identifies the source S-box. Local output bit o0 is the least-significant bit.</text>'.format(height - 18))
+    parts.append("</svg>")
+    return "\n".join(parts)
