@@ -15,7 +15,7 @@ from spn_dc.session import (
     SPNSession,
     get_session,
     load_default_from_disk,
-    random_bijective_matrix,
+    random_permutation_matrix,
     random_sbox,
 )
 
@@ -154,7 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--bits", type=int, default=None, help="defaults to session sbox width")
     s.add_argument("--apply-index", type=int, default=None, dest="apply_index")
 
-    s = sub.add_parser("random_permutation", help="Set P to a random invertible binary matrix")
+    s = sub.add_parser("random_permutation", help="Set P to a random one-to-one bit permutation")
 
     s = sub.add_parser("reset", help="Clear session")
 
@@ -273,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "random_permutation":
             sess._require_cipher()
             dim = sess._num_sboxes * sess._sbox_bits
-            m = random_bijective_matrix(dim)
+            m = random_permutation_matrix(dim)
             sess.set_permutation(m.rows)
             print("P rows:", ",".join(str(r) for r in m.rows))
             return 0

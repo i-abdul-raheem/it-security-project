@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from spn_dc.difference import DiffCell, DiffKind, cell_to_set
-from spn_dc.linear import BinaryMatrix, identity_matrix
+from spn_dc.linear import BinaryMatrix, identity_matrix, is_permutation_matrix
 from spn_dc.parsing import parse_mapping, parse_matrix_rows
 from spn_dc.paths import (
     DifferentialPath,
@@ -46,6 +46,16 @@ def random_bijective_matrix(dim: int, rng: random.Random | None = None) -> Binar
             return BinaryMatrix(dim, rows)
         except ValueError:
             continue
+
+
+def random_permutation_matrix(dim: int, rng: random.Random | None = None) -> BinaryMatrix:
+    """Return a bit permutation: exactly one input and output connection per bit."""
+    if dim <= 0:
+        raise ValueError("dim must be positive")
+    r = rng or random.Random()
+    input_bits = list(range(dim))
+    r.shuffle(input_bits)
+    return BinaryMatrix(dim, tuple(1 << input_bit for input_bit in input_bits))
 
 
 def state_file_path() -> Path:
@@ -181,7 +191,10 @@ class SPNSession:
         rows = tuple(int(x) for x in d["p_rows"])
         if len(rows) != dim:
             raise ValueError("P-layer row count mismatch")
-        s._p = BinaryMatrix(dim, rows)
+        p = BinaryMatrix(dim, rows)
+        if not is_permutation_matrix(p):
+            raise ValueError("P-layer must be a one-to-one bit permutation")
+        s._p = p
         s._input_cells = [_cell_from_dict(x) for x in d["input_cells"]]
         s._output_fix = {int(k): int(v) for k, v in d.get("output_fix", {}).items()}
         s._equality_groups = [tuple(int(x) for x in g) for g in d.get("equality_groups", [])]
@@ -221,7 +234,13 @@ class SPNSession:
         dim = self._num_sboxes * self._sbox_bits
         if len(rows) != dim:
             raise ValueError(f"expected {dim} row masks for P-layer, got {len(rows)}")
-        self._p = BinaryMatrix(dim, tuple(rows))
+        p = BinaryMatrix(dim, tuple(rows))
+        if not is_permutation_matrix(p):
+            raise ValueError(
+                "P-layer must have exactly one 1 in every row and column "
+                "(one input connected to one output)"
+            )
+        self._p = p
         persist_session(self)
 
     def compute_ddt(self, sbox_id: int) -> tuple[tuple[int, ...], ...]:

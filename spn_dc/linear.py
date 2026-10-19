@@ -96,3 +96,11 @@ class BinaryMatrix:
 
 def identity_matrix(n: int) -> BinaryMatrix:
     return BinaryMatrix(n, tuple(1 << i for i in range(n)))
+
+
+def is_permutation_matrix(matrix: BinaryMatrix) -> bool:
+    """True when every input bit maps to exactly one distinct output bit."""
+    return (
+        all(row > 0 and row & (row - 1) == 0 for row in matrix.rows)
+        and len(set(matrix.rows)) == matrix.dim
+    )

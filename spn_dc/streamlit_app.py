@@ -18,9 +18,9 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from spn_dc.difference import DiffKind
-from spn_dc.linear import identity_matrix
+from spn_dc.linear import identity_matrix, is_permutation_matrix
 from spn_dc.parsing import parse_int_list, parse_mapping, parse_matrix_rows
-from spn_dc.session import SPNSession, random_bijective_matrix, random_sbox
+from spn_dc.session import SPNSession, random_permutation_matrix, random_sbox
 from spn_dc.ui_diagram import render_frame_bit_diagram_svg, render_spn_bit_diagram_svg
 from spn_dc.ui_permutation import (
     bit_permutation_wiring,
@@ -251,14 +251,50 @@ def main() -> None:
 
     sess = _sess()
 
+    # Some editor widgets are created before their action buttons. Queue their
+    # new text for the next rerun, then apply it before any widget is rendered.
+    pending_editor_values = st.session_state.pop("pending_editor_values", {})
+    for key, value in pending_editor_values.items():
+        st.session_state[key] = value
+    editor_flash = st.session_state.pop("editor_flash", None)
+
+    # Repair an in-memory P-layer created by an older app version, which allowed
+    # general XOR matrices. Current P-layers are strictly one-to-one.
+    repaired_legacy_p = False
+    if sess._p is not None and not is_permutation_matrix(sess._p):
+        dim = sess._num_sboxes * sess._sbox_bits
+        sess._p = identity_matrix(dim)
+        sess._paths = ()
+        sess._paths_filtered = None
+        _clear_viz_state()
+        st.session_state[f"p_rows_{dim}"] = _p_rows_csv(sess)
+        repaired_legacy_p = True
+
     with st.sidebar:
         st.header("Cipher")
-        rounds = st.number_input("Rounds", min_value=1, max_value=64, value=4, step=1)
-        num_sb = st.number_input("S-boxes per round", min_value=1, max_value=32, value=2, step=1)
-        sbox_bits = st.number_input("Bits per S-box", min_value=1, max_value=8, value=4, step=1)
+        dimension_defaults = {
+            "cipher_rounds": sess._rounds or 4,
+            "cipher_num_sboxes": sess._num_sboxes or 2,
+            "cipher_sbox_bits": sess._sbox_bits or 4,
+        }
+        for key, value in dimension_defaults.items():
+            if key not in st.session_state:
+                st.session_state[key] = value
+        rounds = st.number_input("Rounds", min_value=1, max_value=64, step=1, key="cipher_rounds")
+        num_sb = st.number_input(
+            "S-boxes per round", min_value=1, max_value=32, step=1, key="cipher_num_sboxes"
+        )
+        sbox_bits = st.number_input(
+            "Bits per S-box", min_value=1, max_value=8, step=1, key="cipher_sbox_bits"
+        )
         if st.button("Create / reset cipher", type="primary"):
             sess.create_spn(int(rounds), int(num_sb), int(sbox_bits))
             _clear_viz_state()
+            for i, sb in enumerate(sess._sboxes):
+                key = f"sbox_map_{i}_{sess._sbox_bits}_{sess._num_sboxes}"
+                st.session_state[key] = ",".join(str(x) for x in sb.table)
+            dim = sess._num_sboxes * sess._sbox_bits
+            st.session_state[f"p_rows_{dim}"] = _p_rows_csv(sess)
             st.success("Cipher initialized (identity S-boxes + identity P).")
         if st.button("Full reset (clear cipher)"):
             sess.reset()
@@ -272,13 +308,60 @@ def main() -> None:
                 st.error("Create a cipher first.")
             else:
                 dim = sess._num_sboxes * sess._sbox_bits
-                m = random_bijective_matrix(dim)
+                m = random_permutation_matrix(dim)
                 sess.set_permutation(m.rows)
-                st.success("Random invertible P applied.")
+                st.session_state[f"p_rows_{dim}"] = _p_rows_csv(sess)
+                st.success("Random one-to-one bit permutation applied.")
+
+        st.divider()
+        st.subheader("Saved configuration")
+        config_file = st.file_uploader("Config JSON", type=("json",), key="config_upload")
+        if st.button("Import config", disabled=config_file is None):
+            try:
+                imported = SPNSession.from_json(config_file.getvalue().decode("utf-8"))
+            except (UnicodeDecodeError, ValueError, TypeError, KeyError) as exc:
+                st.error(f"Could not import configuration: {exc}")
+            else:
+                st.session_state.spn = imported
+                _clear_viz_state()
+                imported_dim = imported._num_sboxes * imported._sbox_bits
+                pending = {
+                    "cipher_rounds": imported._rounds,
+                    "cipher_num_sboxes": imported._num_sboxes,
+                    "cipher_sbox_bits": imported._sbox_bits,
+                    f"p_rows_{imported_dim}": _p_rows_csv(imported),
+                }
+                pending.update(
+                    {
+                        f"sbox_map_{i}_{imported._sbox_bits}_{imported._num_sboxes}": ",".join(
+                            str(x) for x in sb.table
+                        )
+                        for i, sb in enumerate(imported._sboxes)
+                    }
+                )
+                st.session_state.pending_editor_values = pending
+                st.session_state.editor_flash = "Configuration imported."
+                st.rerun()
+
+        if sess._sboxes:
+            st.download_button(
+                "Download current config",
+                data=sess.to_json(),
+                file_name="spn-config.json",
+                mime="application/json",
+            )
 
     if not sess._sboxes:
         st.info("Use the sidebar to **Create / reset cipher** to begin.")
         return
+
+    if repaired_legacy_p:
+        st.warning(
+            "The previous many-connection P-layer was replaced with identity because "
+            "P-layers are now required to be one-to-one. Click **Random P-layer** for a shuffle."
+        )
+    if editor_flash:
+        st.success(editor_flash)
 
     dim = sess._num_sboxes * sess._sbox_bits
     tabs = st.tabs(
@@ -291,7 +374,9 @@ def main() -> None:
             "Paths",
             "Check constraints",
             "Bit wiring",
-        ]
+        ],
+        key="analysis_tab",
+        on_change="rerun",
     )
 
     with tabs[0]:
@@ -301,9 +386,10 @@ def main() -> None:
             for i in range(sess._num_sboxes):
                 key = f"sbox_map_{i}_{sess._sbox_bits}_{sess._num_sboxes}"
                 cur_csv = ",".join(str(x) for x in sess._sboxes[i].table)
+                if key not in st.session_state:
+                    st.session_state[key] = cur_csv
                 txt = st.text_area(
                     f"S-box {i} mapping (comma-separated, length {1 << sess._sbox_bits})",
-                    value=cur_csv,
                     height=88,
                     key=key,
                 )
@@ -316,15 +402,24 @@ def main() -> None:
             if st.button("Randomize all S-boxes"):
                 for j in range(sess._num_sboxes):
                     sess.set_sbox(j, random_sbox(sess._sbox_bits).table)
-                st.success("All S-boxes randomized.")
+                st.session_state.pending_editor_values = {
+                    f"sbox_map_{j}_{sess._sbox_bits}_{sess._num_sboxes}": ",".join(
+                        str(x) for x in sess._sboxes[j].table
+                    )
+                    for j in range(sess._num_sboxes)
+                }
+                st.session_state.editor_flash = "All S-boxes randomized."
+                st.rerun()
         with c2:
             st.subheader("P-layer (GF(2) rows)")
             st.caption(f"Provide **{dim}** comma-separated row integers (same convention as CLI).")
+            p_rows_key = f"p_rows_{dim}"
+            if p_rows_key not in st.session_state:
+                st.session_state[p_rows_key] = _p_rows_csv(sess)
             prow = st.text_area(
                 "Row bitmasks",
-                value=_p_rows_csv(sess),
                 height=min(200, 24 + dim * 14),
-                key=f"p_rows_{dim}",
+                key=p_rows_key,
             )
             if st.button("Apply P-layer"):
                 try:
@@ -334,7 +429,11 @@ def main() -> None:
                     st.error(str(e))
             if st.button("Identity P"):
                 sess.set_permutation(identity_matrix(dim).rows)
-                st.success("P set to identity.")
+                st.session_state.pending_editor_values = {
+                    f"p_rows_{dim}": _p_rows_csv(sess)
+                }
+                st.session_state.editor_flash = "P set to identity."
+                st.rerun()
 
     with tabs[1]:
         st.subheader("Permutation views")

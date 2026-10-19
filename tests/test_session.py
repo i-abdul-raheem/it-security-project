@@ -1,12 +1,27 @@
+import pytest
+
 from spn_dc.difference import DiffCell
 from spn_dc.linear import identity_matrix
-from spn_dc.session import SPNSession
+from spn_dc.session import SPNSession, random_permutation_matrix
 from spn_dc.sbox import SBox
 from spn_dc.spn import SPNRoundSpec
 
 
 def _id4() -> SBox:
     return SBox(tuple(range(16)))
+
+
+def test_random_permutation_matrix_is_one_to_one():
+    matrix = random_permutation_matrix(16)
+    assert all(row.bit_count() == 1 for row in matrix.rows)
+    assert len(set(matrix.rows)) == matrix.dim
+
+
+def test_session_rejects_one_to_many_p_layer():
+    s = SPNSession()
+    s.create_spn(1, 2, 2)
+    with pytest.raises(ValueError, match="one input connected to one output"):
+        s.set_permutation((0b0011, 0b0010, 0b0100, 0b1000))
 
 
 def test_session_propagate_and_paths():
