@@ -249,6 +249,7 @@ class SPNSession:
                 "(one input connected to one output)"
             )
         self._p = p
+        self._invalidate_paths()
         persist_session(self)
 
     def compute_ddt(self, sbox_id: int) -> tuple[tuple[int, ...], ...]:

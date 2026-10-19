@@ -20,7 +20,28 @@ from spn_dc.difference import DiffKind
 from spn_dc.linear import identity_matrix, is_permutation_matrix
 from spn_dc.parsing import parse_int_list, parse_mapping, parse_matrix_rows
 from spn_dc.session import SPNSession, random_permutation_matrix, random_sbox
-from spn_dc.ui_diagram import render_frame_bit_diagram_svg, render_spn_bit_diagram_svg
+from spn_dc.ui_analysis import (
+    ddt_row_summary,
+    ddt_summary,
+    ddt_transition_rows,
+    render_activity_matrix_svg,
+    render_backward_differential_svg,
+    render_cipher_configuration_svg,
+    render_concrete_sbox_pair_svg,
+    render_constraint_graph_svg,
+    render_ddt_heatmap_svg,
+    render_differential_trail_svg,
+    render_multiround_spn_svg,
+    render_p_diffusion_svg,
+    render_path_probability_svg,
+    render_path_search_tree_svg,
+    render_sbox_differential_svg,
+)
+from spn_dc.ui_diagram import (
+    render_frame_bit_diagram_svg,
+    render_sbox_to_p_layer_svg,
+    render_spn_bit_diagram_svg,
+)
 from spn_dc.ui_permutation import (
     bit_permutation_wiring,
     is_pure_bit_permutation,
@@ -131,7 +152,7 @@ def _sync_p_widget_state(sess: SPNSession) -> None:
 
 def _randomize_p_layer(sess: SPNSession) -> None:
     dim = sess._num_sboxes * sess._sbox_bits
-    sess.set_permutation(random_bijective_matrix(dim).rows)
+    sess.set_permutation(random_permutation_matrix(dim).rows)
     _sync_p_widget_state(sess)
     _clear_viz_state()
     st.session_state.p_randomized_notice = True
