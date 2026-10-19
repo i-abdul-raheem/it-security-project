@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import FrozenSet
 
 
@@ -8,7 +9,6 @@ def _validate_bijection(table: tuple[int, ...]) -> None:
     n = len(table)
     if n == 0 or (n & (n - 1)) != 0:
         raise ValueError("S-box length must be a positive power of two")
-    bits = n.bit_length() - 1
     seen = [False] * n
     for v in table:
         if v < 0 or v >= n or seen[v]:
@@ -37,6 +37,7 @@ class SBox:
     def image(self, x: int) -> int:
         return self.table[x]
 
+    @lru_cache(maxsize=256)
     def ddt(self) -> tuple[tuple[int, ...], ...]:
         """Difference distribution table: ddt[da][db] = count of x with S(x^da)^S(x)=db."""
         n = self.n
@@ -49,6 +50,7 @@ class SBox:
             rows.append(tuple(row))
         return tuple(rows)
 
+    @lru_cache(maxsize=256)
     def inv_ddt(self) -> tuple[tuple[int, ...], ...]:
         """Transpose view: for output difference db, input differences da with positive count."""
         ddt = self.ddt()

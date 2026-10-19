@@ -15,7 +15,6 @@ import time
 os.environ.setdefault("SPN_DC_NO_PERSIST", "1")
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from spn_dc.difference import DiffKind
 from spn_dc.linear import identity_matrix, is_permutation_matrix
@@ -60,9 +59,10 @@ def _identity_csv(bits: int) -> str:
 
 
 def _p_rows_csv(sess: SPNSession) -> str:
-    if not sess._sboxes or sess._p is None:
+    p_layer = sess._p
+    if not sess._sboxes or p_layer is None:
         return ""
-    return ",".join(str(r) for r in sess._p.rows)
+    return ",".join(str(r) for r in p_layer.rows)
 
 
 def _parse_equality_groups(text: str) -> tuple[tuple[int, ...], ...]:
@@ -103,36 +103,103 @@ def _clear_viz_state() -> None:
         st.session_state.pop(key, None)
 
 
+def _randomize_all_sboxes(sess: SPNSession) -> None:
+    """Randomize model and synchronized text widgets before Streamlit redraws."""
+    for index in range(sess._num_sboxes):
+        table = random_sbox(sess._sbox_bits).table
+        sess.set_sbox(index, table)
+        key = f"sbox_map_{index}_{sess._sbox_bits}_{sess._num_sboxes}"
+        st.session_state[key] = ",".join(str(value) for value in table)
+    _clear_viz_state()
+    st.session_state.sbox_randomized_notice = True
+
+
+def _sync_sbox_widget_state(sess: SPNSession) -> None:
+    """Make mapping editors reflect the model after creating or replacing a cipher."""
+    for index, sb in enumerate(sess._sboxes):
+        key = f"sbox_map_{index}_{sess._sbox_bits}_{sess._num_sboxes}"
+        st.session_state[key] = ",".join(str(value) for value in sb.table)
+
+
+def _sync_p_widget_state(sess: SPNSession) -> None:
+    """Make the P-layer row editor reflect the current matrix."""
+    p_layer = sess._p
+    if p_layer is not None:
+        dim = sess._num_sboxes * sess._sbox_bits
+        st.session_state[f"p_rows_{dim}"] = ",".join(str(row) for row in p_layer.rows)
+
+
+def _randomize_p_layer(sess: SPNSession) -> None:
+    dim = sess._num_sboxes * sess._sbox_bits
+    sess.set_permutation(random_bijective_matrix(dim).rows)
+    _sync_p_widget_state(sess)
+    _clear_viz_state()
+    st.session_state.p_randomized_notice = True
+
+
+def _set_identity_p_layer(sess: SPNSession) -> None:
+    dim = sess._num_sboxes * sess._sbox_bits
+    sess.set_permutation(identity_matrix(dim).rows)
+    _sync_p_widget_state(sess)
+    _clear_viz_state()
+    st.session_state.p_identity_notice = True
+
+
 def _diagram_height(num_bits: int) -> int:
     step = max(16, min(24, 520 // max(num_bits, 1)))
     return int(max(300, min(920, (num_bits - 1) * step + 160)))
 
 
-def _show_bit_diagram_svg(svg: str, *, num_bits: int) -> None:
-    components.html(
-        f'<div style="overflow:auto;width:100%">{svg}</div>',
-        height=_diagram_height(num_bits),
-        scrolling=True,
+def _download_svg(svg: str, *, filename: str, key: str) -> None:
+    st.download_button(
+        "Save diagram (SVG)",
+        data=svg.encode("utf-8"),
+        file_name=filename,
+        mime="image/svg+xml",
+        key=key,
     )
 
 
-def _show_perm_svg(svg: str, *, height: int) -> None:
-    components.html(
-        f'<div style="overflow:auto;width:100%">{svg}</div>',
-        height=height,
-        scrolling=True,
-    )
+def _show_bit_diagram_svg(
+    svg: str,
+    *,
+    num_bits: int,
+    filename: str,
+    download_key: str,
+    show_download: bool = True,
+) -> None:
+    # st.image has first-class SVG support and renders reliably across
+    # Streamlit/browser versions without an iframe or unsafe HTML component.
+    st.image(svg, width="stretch")
+    if show_download:
+        _download_svg(svg, filename=filename, key=download_key)
 
 
-def _render_bit_diagram(sess: SPNSession, frame: PropFrame | None = None) -> None:
-    if not sess._p or not sess._sboxes:
+def _show_perm_svg(
+    svg: str, *, height: int, filename: str, download_key: str
+) -> None:
+    st.image(svg, width="stretch")
+    _download_svg(svg, filename=filename, key=download_key)
+
+
+def _render_bit_diagram(
+    sess: SPNSession,
+    frame: PropFrame | None = None,
+    *,
+    download_key: str = "bit_network_download",
+    show_download: bool = True,
+) -> tuple[str, str] | None:
+    p_layer = sess._p
+    if p_layer is None or not sess._sboxes:
         return
     n = sess._num_sboxes * sess._sbox_bits
+    tables = tuple(sb.table for sb in sess._sboxes)
     if frame is None:
         svg = render_spn_bit_diagram_svg(
             num_sboxes=sess._num_sboxes,
             sbox_bits=sess._sbox_bits,
-            p_rows=sess._p.rows,
+            p_rows=p_layer.rows,
+            sbox_tables=tables,
             title="Cipher wiring (all S-boxes, bit pins, P connections)",
         )
     else:
@@ -145,13 +212,25 @@ def _render_bit_diagram(sess: SPNSession, frame: PropFrame | None = None) -> Non
         svg = render_frame_bit_diagram_svg(
             num_sboxes=sess._num_sboxes,
             sbox_bits=sess._sbox_bits,
-            p_rows=sess._p.rows,
+            p_rows=p_layer.rows,
+            sbox_tables=tables,
             layer=frame.layer,
             slices=frame.slices,
             round_index=frame.round_index,
             layer_title=frame.layer_title,
         )
-    _show_bit_diagram_svg(svg, num_bits=n)
+    if frame is None:
+        filename = "spn_bit_network.svg"
+    else:
+        filename = f"round_{frame.round_index}_{frame.layer}_bit_network.svg"
+    _show_bit_diagram_svg(
+        svg,
+        num_bits=n,
+        filename=filename,
+        download_key=download_key,
+        show_download=show_download,
+    )
+    return svg, filename
 
 
 def _render_propagation_animation(*, key_prefix: str = "viz", sess: SPNSession | None = None) -> None:
@@ -205,8 +284,10 @@ def _render_propagation_animation(*, key_prefix: str = "viz", sess: SPNSession |
     viz_slot = st.empty()
     bit_slot = st.empty()
     progress_slot = st.empty()
+    current_bit_diagram: tuple[str, str] | None = None
 
     def _draw(ix: int, *, pulse: bool) -> None:
+        nonlocal current_bit_diagram
         html_block = render_propagation_frame_html(
             frames[ix],
             sbox_bits=bits,
@@ -218,7 +299,12 @@ def _render_propagation_animation(*, key_prefix: str = "viz", sess: SPNSession |
         if sess is not None:
             with bit_slot.container():
                 st.markdown("#### Bit pins, S-boxes & P wiring")
-                _render_bit_diagram(sess, frames[ix])
+                current_bit_diagram = _render_bit_diagram(
+                    sess,
+                    frames[ix],
+                    download_key=f"{key_prefix}_animated_bit_download_{ix}",
+                    show_download=False,
+                )
 
     if play:
         runs = 2 if loop else 1
@@ -240,6 +326,34 @@ def _render_propagation_animation(*, key_prefix: str = "viz", sess: SPNSession |
         st.session_state["viz_current_step"] = step
 
     show_ix = int(st.session_state.get("viz_current_step", step))
+    saved_frame = render_propagation_frame_html(
+        frames[show_ix],
+        sbox_bits=bits,
+        frame_index=show_ix,
+        total_frames=total,
+        pulse=False,
+    )
+    frame_document = (
+        "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>"
+        + saved_frame
+        + "</body></html>"
+    )
+    st.download_button(
+        "Save current propagation diagram (HTML)",
+        data=frame_document.encode("utf-8"),
+        file_name=(
+            f"round_{frames[show_ix].round_index}_{frames[show_ix].layer}_propagation.html"
+        ),
+        mime="text/html",
+        key=f"{key_prefix}_save_propagation_frame_{show_ix}",
+    )
+    if current_bit_diagram is not None:
+        bit_svg, bit_filename = current_bit_diagram
+        _download_svg(
+            bit_svg,
+            filename=bit_filename,
+            key=f"{key_prefix}_save_current_bit_diagram_{show_ix}",
+        )
     with st.expander("Raw set data (current step)", expanded=False):
         st.json({str(i): sorted(s) for i, s in enumerate(frames[show_ix].slices)})
 
@@ -289,6 +403,8 @@ def main() -> None:
         )
         if st.button("Create / reset cipher", type="primary"):
             sess.create_spn(int(rounds), int(num_sb), int(sbox_bits))
+            _sync_sbox_widget_state(sess)
+            _sync_p_widget_state(sess)
             _clear_viz_state()
             for i, sb in enumerate(sess._sboxes):
                 key = f"sbox_map_{i}_{sess._sbox_bits}_{sess._num_sboxes}"
@@ -364,6 +480,19 @@ def main() -> None:
         st.success(editor_flash)
 
     dim = sess._num_sboxes * sess._sbox_bits
+    config_p_layer = sess._p
+    if config_p_layer is not None:
+        _show_perm_svg(
+            render_cipher_configuration_svg(
+                rounds=sess._rounds,
+                num_sboxes=sess._num_sboxes,
+                sbox_bits=sess._sbox_bits,
+                p_rows=config_p_layer.rows,
+            ),
+            height=150,
+            filename="cipher_configuration.svg",
+            download_key="save_cipher_configuration",
+        )
     tabs = st.tabs(
         [
             "S-boxes & P",
@@ -396,8 +525,9 @@ def main() -> None:
                 if st.button(f"Apply S-box {i}", key=f"apply_sb_{i}"):
                     try:
                         sess.set_sbox(i, parse_mapping(txt.replace("\n", "")))
+                        _clear_viz_state()
                         st.success(f"S-box {i} updated.")
-                    except Exception as e:
+                    except ValueError as e:
                         st.error(str(e))
             if st.button("Randomize all S-boxes"):
                 for j in range(sess._num_sboxes):
@@ -424,8 +554,9 @@ def main() -> None:
             if st.button("Apply P-layer"):
                 try:
                     sess.set_permutation(parse_matrix_rows(prow.replace("\n", "")))
+                    _clear_viz_state()
                     st.success("P-layer updated.")
-                except Exception as e:
+                except ValueError as e:
                     st.error(str(e))
             if st.button("Identity P"):
                 sess.set_permutation(identity_matrix(dim).rows)
@@ -450,7 +581,7 @@ def main() -> None:
             st.markdown(f"**S{sid}** — {bits}-bit permutation ({len(sb.table)} entries)")
             st.dataframe(
                 sbox_mapping_rows(sb.table, bits),
-                use_container_width=True,
+                width="stretch",
                 height=min(420, 40 + len(sb.table) * 22),
             )
             if len(sb.table) <= 64:
@@ -460,6 +591,8 @@ def main() -> None:
                         sb.table, bits, title=f"S{sid}: wire x -> S(x)"
                     ),
                     height=h,
+                    filename=f"sbox_{sid}_permutation.svg",
+                    download_key=f"save_sbox_{sid}_permutation",
                 )
             else:
                 st.info("Braid diagram hidden for large S-boxes; use the table above.")
@@ -471,17 +604,18 @@ def main() -> None:
                 rows = sess._p.rows
                 n = len(rows)
                 cols = [f"x{j}" for j in range(n)]
-                idx = [f"y{i}" for i in range(n)]
                 st.markdown("**Matrix M** — `M[y,x] = 1` means output bit y XORs input bit x")
                 st.dataframe(
                     {cols[j]: [p_matrix_bit_grid(rows)[i][j] for i in range(n)] for j in range(n)},
-                    use_container_width=True,
+                    width="stretch",
                     height=min(500, 40 + n * 24),
                 )
                 cell = 14 if n > 12 else 22
                 _show_perm_svg(
                     render_p_matrix_svg(rows, title="P-layer heatmap (1 = connected)"),
                     height=min(520, 60 + n * cell),
+                    filename="p_layer_matrix.svg",
+                    download_key="save_p_layer_matrix",
                 )
                 if is_pure_bit_permutation(rows):
                     st.success("This P-layer is a **pure bit permutation** (wire shuffle).")
@@ -490,18 +624,100 @@ def main() -> None:
                     _show_perm_svg(
                         render_bit_perm_wiring_svg(rows),
                         height=max(120, 24 + n * 18),
+                        filename="p_layer_bit_permutation.svg",
+                        download_key="save_p_layer_bit_permutation",
                     )
                 else:
                     st.info("General linear mix: each output bit XORs **several** input bits.")
                 with st.expander("Row equations (GF(2))"):
                     for line in p_row_descriptions(rows):
                         st.code(line, language=None)
+                st.markdown("#### Diffusion and branch number")
+                _show_perm_svg(
+                    render_p_diffusion_svg(rows, sess._num_sboxes, sess._sbox_bits),
+                    height=min(760, 180 + sess._num_sboxes * 34),
+                    filename="p_layer_diffusion.svg",
+                    download_key="save_p_layer_diffusion",
+                )
 
     with tabs[2]:
         sid = st.selectbox("S-box index", list(range(sess._num_sboxes)), key="ddt_sbox_id")
-        if st.button("Show DDT"):
-            ddt = sess.compute_ddt(sid)
-            st.dataframe(list(ddt), use_container_width=True, height=min(600, 40 + len(ddt) * 28))
+        sb = sess._sboxes[sid]
+        ddt = sess.compute_ddt(sid)
+        summary = ddt_summary(ddt)
+        metric_a, metric_b, metric_c = st.columns(3)
+        metric_a.metric("DDT size", f"{summary['size']} × {summary['size']}")
+        metric_b.metric("Differential uniformity", int(summary["differential_uniformity"]))
+        metric_c.metric("Maximum transition probability", f"{summary['maximum_probability']:.4g}")
+        selected_dx = st.number_input(
+            "Input difference Δx",
+            min_value=0,
+            max_value=(1 << sess._sbox_bits) - 1,
+            value=min(1, (1 << sess._sbox_bits) - 1),
+            key="ddt_input_difference",
+        )
+        row_summary = ddt_row_summary(sb, int(selected_dx))
+        st.caption(
+            f"Selected row **Δx = 0x{int(selected_dx):X}** · "
+            f"{row_summary['feasible_outputs']} feasible Δy value(s) · "
+            f"strongest probability {row_summary['strongest_probability']:.4g}"
+        )
+        show_numeric_ddt = st.toggle(
+            "Show numeric DDT",
+            value=False,
+            key=f"show_numeric_ddt_{sess._sbox_bits}",
+        )
+        if show_numeric_ddt:
+            st.dataframe(list(ddt), width="stretch", height=min(600, 40 + len(ddt) * 28))
+        st.markdown("#### DDT heatmap")
+        _show_perm_svg(
+            render_ddt_heatmap_svg(
+                ddt,
+                title=f"S{sid} difference distribution table",
+                selected_input=int(selected_dx),
+            ),
+            height=min(620, 95 + len(ddt) * max(10, min(26, 520 // len(ddt)))),
+            filename=f"sbox_{sid}_ddt_heatmap_dx_{int(selected_dx):X}.svg",
+            download_key=f"save_ddt_heatmap_{sid}_{int(selected_dx)}",
+        )
+        st.markdown("#### Differential transitions and probabilities")
+        transitions = ddt_transition_rows(sb, int(selected_dx))
+        _show_perm_svg(
+            render_sbox_differential_svg(sb, int(selected_dx)),
+            height=min(2260, max(170, 75 + min(64, len(transitions)) * 34)),
+            filename=f"sbox_{sid}_differential_dx_{int(selected_dx):X}.svg",
+            download_key=f"save_ddt_forward_{sid}_{int(selected_dx)}",
+        )
+        st.dataframe(transitions, width="stretch", hide_index=True)
+        st.markdown("#### Concrete input pair")
+        concrete_x = st.number_input(
+            "Example value x",
+            min_value=0,
+            max_value=(1 << sess._sbox_bits) - 1,
+            value=0,
+            key="ddt_concrete_x",
+        )
+        _show_perm_svg(
+            render_concrete_sbox_pair_svg(sb, int(concrete_x), int(selected_dx)),
+            height=210,
+            filename=f"sbox_{sid}_concrete_pair_x_{int(concrete_x):X}_dx_{int(selected_dx):X}.svg",
+            download_key=f"save_ddt_pair_{sid}_{int(concrete_x)}_{int(selected_dx)}",
+        )
+        st.markdown("#### Backward propagation")
+        selected_dy = st.number_input(
+            "Fixed output difference Δy",
+            min_value=0,
+            max_value=(1 << sess._sbox_bits) - 1,
+            value=0,
+            key="ddt_output_difference",
+        )
+        inverse_count = len(sb.input_diffs_for_output(int(selected_dy)))
+        _show_perm_svg(
+            render_backward_differential_svg(sb, int(selected_dy)),
+            height=min(2260, max(170, 75 + min(64, inverse_count) * 34)),
+            filename=f"sbox_{sid}_backward_dy_{int(selected_dy):X}.svg",
+            download_key=f"save_ddt_backward_{sid}_{int(selected_dy)}",
+        )
 
     with tabs[3]:
         st.subheader("Round-1 input cells")
@@ -530,14 +746,17 @@ def main() -> None:
                     )
                     if st.button("Apply fixed", key=f"btn_in_fixed_{i}"):
                         sess.fix_input_difference(i, int(v))
+                        _clear_viz_state()
                         st.success("Saved.")
                 elif mode == "abstract":
                     if st.button("Set abstract", key=f"btn_in_abs_{i}"):
                         sess.set_abstract_difference(i)
+                        _clear_viz_state()
                         st.success("Saved.")
                 else:
                     if st.button("Set Any", key=f"btn_in_any_{i}"):
                         sess.set_input_any(i)
+                        _clear_viz_state()
                         st.success("Saved.")
         st.divider()
         st.subheader("Round-1 output difference fixes (after S-box)")
@@ -554,6 +773,7 @@ def main() -> None:
                     )
                     if st.button("Save", key=f"btn_out_fix_{i}"):
                         sess.fix_output_difference(i, int(ov))
+                        _clear_viz_state()
                         st.success("Saved.")
         st.divider()
         st.subheader("Equality on inputs")
@@ -569,20 +789,36 @@ def main() -> None:
                 try:
                     g = _parse_equality_groups(eq_text)
                     sess.replace_equality_groups(g)
+                    _clear_viz_state()
                     st.success("Equality groups replaced.")
-                except Exception as e:
+                except (ValueError, IndexError) as e:
                     st.error(str(e))
         with b2:
             if st.button("Clear equality groups"):
                 sess.replace_equality_groups(())
+                _clear_viz_state()
                 st.success("Cleared.")
         with b3:
             if st.button("Reset input cells to Any"):
                 sess.reset_input_cells()
+                _clear_viz_state()
                 st.success("Input cells cleared.")
         if st.button("Clear output fixes"):
             sess.clear_output_fixes()
+            _clear_viz_state()
             st.success("Output fixes cleared.")
+        st.markdown("#### Constraint diagram")
+        _show_perm_svg(
+            render_constraint_graph_svg(
+                sess._input_cells,
+                sess._output_fix,
+                sess._equality_groups,
+                n_values=1 << sess._sbox_bits,
+            ),
+            height=265,
+            filename="constraint_relationships.svg",
+            download_key="save_constraint_relationships_input_tab",
+        )
 
     with tabs[4]:
         st.subheader("Propagate packed difference")
@@ -604,6 +840,12 @@ def main() -> None:
             _render_propagation_animation(key_prefix="prop", sess=sess)
             prop_trail = st.session_state.get("prop_trail")
             if prop_trail:
+                _show_perm_svg(
+                    render_activity_matrix_svg(prop_trail),
+                    height=min(700, 130 + sess._num_sboxes * 34),
+                    filename="propagation_activity_matrix.svg",
+                    download_key="save_propagation_activity",
+                )
                 st.divider()
                 st.markdown("**All rounds (detail)**")
                 for ri, stt in enumerate(prop_trail):
@@ -633,7 +875,7 @@ def main() -> None:
                     sess.filter_paths(float(thr), strict=True)
                     n = len(sess._paths_filtered or ())
                     st.success(f"{n} path(s) after filter.")
-                except Exception as e:
+                except RuntimeError as e:
                     st.error(str(e))
             pool = list(sess._paths_filtered) if sess._paths_filtered is not None else list(sess._paths)
             if not pool:
@@ -643,9 +885,29 @@ def main() -> None:
                 )
             else:
                 labels = [f"id={p.path_id}  p={p.probability:.4g}" for p in pool]
+                st.markdown("#### Probability comparison")
+                _show_perm_svg(
+                    render_path_probability_svg(pool),
+                    height=min(850, 80 + min(30, len(pool)) * 24),
+                    filename="path_probabilities.svg",
+                    download_key="save_path_probabilities",
+                )
+                with st.expander("Path-search tree", expanded=False):
+                    _show_perm_svg(
+                        render_path_search_tree_svg(pool),
+                        height=min(900, max(220, 75 + min(80, len(pool)) * 34)),
+                        filename="path_search_tree.svg",
+                        download_key="save_path_search_tree",
+                    )
                 choice = st.selectbox("Select trail", range(len(pool)), format_func=lambda i: labels[i])
                 p = pool[int(choice)]
                 st.markdown(f"**Probability:** `{p.probability}`")
+                _show_perm_svg(
+                    render_differential_trail_svg(p),
+                    height=250,
+                    filename=f"differential_trail_{p.path_id}.svg",
+                    download_key=f"save_differential_trail_{p.path_id}",
+                )
                 st.markdown("**Round-by-round difference permutations**")
                 st.dataframe(
                     [
@@ -657,7 +919,7 @@ def main() -> None:
                         }
                         for ri, (before, after_sbox, after_p) in enumerate(p.trace, start=1)
                     ],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
                 if st.button("Animate this trail", key="path_animate"):
@@ -678,6 +940,17 @@ def main() -> None:
                 if st.session_state.get("viz_source") == "constraint check":
                     _clear_viz_state()
                 st.error(err)
+                _show_perm_svg(
+                    render_constraint_graph_svg(
+                        sess._input_cells,
+                        sess._output_fix,
+                        sess._equality_groups,
+                        n_values=1 << sess._sbox_bits,
+                    ),
+                    height=265,
+                    filename="constraint_conflict.svg",
+                    download_key="save_constraint_conflict_check_tab",
+                )
             else:
                 st.session_state.prop_trail = trail
                 _store_viz_frames(frames_from_trail(trail), sess._sbox_bits, "constraint check")
@@ -699,8 +972,34 @@ def main() -> None:
         st.subheader("Bit-level network diagram")
         st.caption(
             "Each pin **b0…b{n−1}** is one bit of the block (slice 0 = lowest bits). "
-            "Wires: input → S-box → after-S bus → **P** (curves: output bit o XORs every input i with M[o,i]=1)."
+            "Inside each S-box, curved lines show Boolean bit influence from its actual lookup table "
+            "(they are dependencies, not linear wires). After S, **P** curves show output bit o XORing "
+            "every connected input bit i."
         )
+        _show_perm_svg(
+            render_multiround_spn_svg(sess._rounds, sess._num_sboxes, sess._sbox_bits),
+            height=max(270, 140 + sess._num_sboxes * 38),
+            filename="complete_multiround_spn.svg",
+            download_key="save_complete_multiround_spn",
+        )
+        st.markdown("#### S-box outputs → P-layer connections")
+        st.caption(
+            "Every colored pin is an output bit from an S-box and therefore an input bit to P. "
+            "Connections terminate at `=` for a copied bit or `⊕` when a P output combines multiple bits."
+        )
+        bit_tab_p_layer = sess._p
+        if bit_tab_p_layer is not None:
+            _show_perm_svg(
+                render_sbox_to_p_layer_svg(
+                    num_sboxes=sess._num_sboxes,
+                    sbox_bits=sess._sbox_bits,
+                    p_rows=bit_tab_p_layer.rows,
+                ),
+                height=_diagram_height(dim),
+                filename="sbox_outputs_to_p_layer.svg",
+                download_key="save_sbox_to_p_layer",
+            )
+        st.markdown("#### Full bit network")
         frames = st.session_state.get("viz_frames")
         if frames:
             step = st.slider(

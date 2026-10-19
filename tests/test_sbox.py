@@ -37,3 +37,14 @@ def test_ddt_row_sums():
     ddt = sb.ddt()
     for da in range(2):
         assert sum(ddt[da]) == 2
+
+
+def test_permutation_ddt_invariants_and_cache():
+    sb = SBox((0, 1, 3, 2))
+    ddt = sb.ddt()
+    assert sb.ddt() is ddt
+    assert ddt[0] == (4, 0, 0, 0)
+    assert all(ddt[dx][0] == 0 for dx in range(1, sb.n))
+    assert all(value % 2 == 0 for row in ddt for value in row)
+    inv = sb.inv_ddt()
+    assert all(inv[dy][dx] == ddt[dx][dy] for dx in range(sb.n) for dy in range(sb.n))

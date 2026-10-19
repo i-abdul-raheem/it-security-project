@@ -52,3 +52,28 @@ def test_check_constraints_conflict():
     trail, err = s.check_constraints()
     assert trail is None
     assert err is not None
+
+
+def test_cipher_changes_invalidate_generated_paths():
+    s = SPNSession()
+    s.create_spn(1, 1, 2)
+    msg, err = s.generate_paths(1)
+    assert err is None and msg
+    assert s._paths
+
+    s.set_sbox(0, (0, 2, 3, 1))
+    assert s._paths == () and s._paths_filtered is None
+
+    s.generate_paths(1)
+    assert s._paths
+    s.set_permutation(identity_matrix(2).rows)
+    assert s._paths == () and s._paths_filtered is None
+
+
+def test_constraint_changes_invalidate_generated_paths():
+    s = SPNSession()
+    s.create_spn(1, 2, 2)
+    s.generate_paths(0x5)
+    assert s._paths
+    s.fix_input_difference(0, 1)
+    assert s._paths == ()
