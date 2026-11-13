@@ -15,6 +15,7 @@ import time
 os.environ.setdefault("SPN_DC_NO_PERSIST", "1")
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from spn_dc.difference import DiffKind
 from spn_dc.linear import identity_matrix, is_permutation_matrix
@@ -381,6 +382,62 @@ def _render_propagation_animation(*, key_prefix: str = "viz", sess: SPNSession |
 
 def main() -> None:
     st.set_page_config(page_title="SPN Differential Lab", layout="wide")
+    # Tabs change entirely in the browser, so handle scrolling there too.
+    components.html("""
+<script>
+const doc = window.parent.document;
+const listenerKey = '__spnTabScrollListener';
+if (window.parent[listenerKey]) {
+    doc.removeEventListener('click', window.parent[listenerKey]);
+    doc.removeEventListener('keydown', window.parent[listenerKey]);
+}
+const onTabChange = (event) => {
+    const tab = event.target.closest('[role="tab"]');
+    if (!tab) return;
+    if (event.type === 'keydown' &&
+        !['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' '].includes(event.key)) return;
+    const tabList = tab.closest('[role="tablist"]');
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (tabList) tabList.scrollIntoView({
+            behavior: window.parent.matchMedia('(prefers-reduced-motion: reduce)').matches
+                ? 'instant' : 'smooth',
+            block: 'start',
+        });
+    }));
+};
+window.parent[listenerKey] = onTabChange;
+doc.addEventListener('click', onTabChange);
+doc.addEventListener('keydown', onTabChange);
+</script>
+""", height=0)
+    st.markdown("""
+<style>
+[data-testid="stApp"], [data-testid="stApp"] :is(h1,h2,h3,h4,p,label,button,input,textarea,select) { font-family: system-ui, -apple-system, sans-serif; }
+[data-testid="stMainBlockContainer"] {
+    padding: 1.25rem 1.5rem 2rem;
+    max-width: 1600px;
+}
+[data-testid="stSidebarUserContent"] { padding: 1.25rem 1rem; }
+[data-testid="stHeader"] { background: transparent; }
+[data-testid="stVerticalBlock"] { gap: 0.65rem; }
+[data-testid="stHorizontalBlock"] { gap: 1rem; min-width: 0; }
+[data-testid="stColumn"] { min-width: 0; }
+[data-testid="stApp"] h1 { font-size: 1.8rem; padding: 0 0 0.35rem; }
+[data-testid="stApp"] h2 { font-size: 1.35rem; padding: 0.35rem 0; }
+[data-testid="stApp"] h3 { font-size: 1.1rem; padding: 0.25rem 0; }
+[data-testid="stApp"] h4 { font-size: 1rem; padding: 0.25rem 0; }
+[data-testid="stMarkdownContainer"] p { margin-bottom: 0.4rem; }
+[data-testid="stApp"] hr { margin: 0.65rem 0; }
+[data-baseweb="tab-list"] { gap: 0.25rem; flex-wrap: wrap; }
+[data-baseweb="tab"] { padding: 0.4rem 0.65rem; height: auto; }
+[role="tablist"] { scroll-margin-top: 3.75rem; }
+[data-testid="stImage"] img { max-width: 100%; max-height: 65vh; object-fit: contain; }
+@media (max-width: 640px) {
+    [data-testid="stMainBlockContainer"] { padding: 1rem 0.75rem 2rem; }
+    [data-baseweb="tab"] { padding: 0.35rem 0.5rem; }
+}
+</style>
+""", unsafe_allow_html=True)
     st.title("SPN differential lab")
     st.caption("Configurable S-box layer + bijective linear P-layer · DDT · propagation · trails")
 
@@ -453,7 +510,7 @@ def main() -> None:
         st.divider()
         st.subheader("Saved configuration")
         config_file = st.file_uploader("Config JSON", type=("json",), key="config_upload")
-        if st.button("Import config", disabled=config_file is None):
+        if st.button("Import config", disabled=config_file is None) and config_file is not None:
             try:
                 imported = SPNSession.from_json(config_file.getvalue().decode("utf-8"))
             except (UnicodeDecodeError, ValueError, TypeError, KeyError) as exc:
@@ -503,17 +560,23 @@ def main() -> None:
     dim = sess._num_sboxes * sess._sbox_bits
     config_p_layer = sess._p
     if config_p_layer is not None:
-        _show_perm_svg(
-            render_cipher_configuration_svg(
-                rounds=sess._rounds,
-                num_sboxes=sess._num_sboxes,
-                sbox_bits=sess._sbox_bits,
-                p_rows=config_p_layer.rows,
-            ),
-            height=150,
-            filename="cipher_configuration.svg",
-            download_key="save_cipher_configuration",
-        )
+        with st.sidebar:
+            st.caption(
+                f"Current cipher: {sess._rounds} rounds · "
+                f"{sess._num_sboxes} × {sess._sbox_bits}-bit S-boxes · {dim}-bit block"
+            )
+            with st.expander("Cipher configuration", expanded=False):
+                _show_perm_svg(
+                    render_cipher_configuration_svg(
+                        rounds=sess._rounds,
+                        num_sboxes=sess._num_sboxes,
+                        sbox_bits=sess._sbox_bits,
+                        p_rows=config_p_layer.rows,
+                    ),
+                    height=150,
+                    filename="cipher_configuration.svg",
+                    download_key="save_cipher_configuration",
+                )
     tabs = st.tabs(
         [
             "S-boxes & P",
@@ -597,6 +660,7 @@ def main() -> None:
 
         with ptab_sb:
             sid = st.selectbox("S-box", list(range(sess._num_sboxes)), key="perm_sbox_id")
+            sid = 0 if sid is None else sid
             sb = sess._sboxes[sid]
             bits = sess._sbox_bits
             st.markdown(f"**S{sid}** — {bits}-bit permutation ({len(sb.table)} entries)")
@@ -663,6 +727,7 @@ def main() -> None:
 
     with tabs[2]:
         sid = st.selectbox("S-box index", list(range(sess._num_sboxes)), key="ddt_sbox_id")
+        sid = 0 if sid is None else sid
         sb = sess._sboxes[sid]
         ddt = sess.compute_ddt(sid)
         summary = ddt_summary(ddt)
@@ -851,8 +916,8 @@ def main() -> None:
                 st.error("Invalid integer.")
             else:
                 trail, err = sess.propagate_difference(dx)
-                if err:
-                    st.error(err)
+                if err or trail is None:
+                    st.error(err or "Propagation returned no trail.")
                 else:
                     st.session_state.prop_trail = trail
                     _store_viz_frames(frames_from_trail(trail), sess._sbox_bits, f"Δx = {packed}")
@@ -921,7 +986,7 @@ def main() -> None:
                         download_key="save_path_search_tree",
                     )
                 choice = st.selectbox("Select trail", range(len(pool)), format_func=lambda i: labels[i])
-                p = pool[int(choice)]
+                p = pool[0 if choice is None else choice]
                 st.markdown(f"**Probability:** `{p.probability}`")
                 _show_perm_svg(
                     render_differential_trail_svg(p),
@@ -957,7 +1022,7 @@ def main() -> None:
     with tabs[6]:
         if st.button("Run constraint check", type="primary"):
             trail, err = sess.check_constraints()
-            if err:
+            if err or trail is None:
                 if st.session_state.get("viz_source") == "constraint check":
                     _clear_viz_state()
                 st.error(err)
