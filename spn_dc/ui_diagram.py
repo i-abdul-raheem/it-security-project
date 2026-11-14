@@ -367,3 +367,62 @@ def render_sbox_to_p_layer_svg(
     parts.append('<text x="30" y="{0}" font-size="9" fill="#64748b">Wire color identifies the source S-box. Local output bit o0 is the least-significant bit.</text>'.format(height - 18))
     parts.append("</svg>")
     return "\n".join(parts)
+
+
+def render_vertical_network_svg(*, rounds: int, num_sboxes: int,
+                                sbox_bits: int, p_rows: tuple[int, ...],
+                                sbox_tables: Sequence[Sequence[int]] | None = None,
+                                trail=None) -> str:
+    """All rounds, top to bottom, with every XOR connection drawn explicitly."""
+    n = num_sboxes * sbox_bits
+    if rounds < 1 or len(p_rows) != n:
+        raise ValueError("Invalid rounds or P-layer dimensions")
+    if sbox_tables is not None and len(sbox_tables) != num_sboxes:
+        raise ValueError("S-box table count must match number of S-boxes")
+    dependencies = [sbox_bit_dependencies(table, sbox_bits) for table in sbox_tables] if sbox_tables is not None else None
+    step = 24
+    width = max(400, n * step + 120)
+    height = 90 + rounds * 210
+    left = (width - (n - 1) * step) / 2
+    def x(bit):
+        return left + bit * step
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
+             f'width="{width}" height="{height}" style="font-family:system-ui,sans-serif">',
+             '<rect width="100%" height="100%" fill="#ffffff"/>',
+             f'<text x="{width/2}" y="22" text-anchor="middle" font-size="16" fill="#0f172a">Complete propagation network</text>',
+             f'<text x="{width/2}" y="42" text-anchor="middle" font-size="10" fill="#475569">Top to bottom ? P outputs XOR all incoming wires ? green = 1, gray = 0, amber = mixed</text>']
+    def pins(y, slices=None):
+        states = pin_states_from_slices(slices, sbox_bits) if slices is not None else ['-'] * n
+        for bit in range(n):
+            parts.append(f'<circle cx="{x(bit)}" cy="{y}" r="3" fill="{_PIN_FILL[states[bit]]}" stroke="{_PIN_STROKE[states[bit]]}"><title>bit {bit}: {states[bit]}</title></circle>')
+    for r in range(rounds):
+        top = 70 + r * 210
+        state = trail[r] if trail is not None and r < len(trail) else None
+        parts.append(f'<text x="8" y="{top+30}" font-size="11" fill="#475569">R{r+1}</text>')
+        pins(top, state.before_sbox if state is not None else None)
+        for sb in range(num_sboxes):
+            sx = x(sb * sbox_bits) - 9
+            sw = (sbox_bits - 1) * step + 18
+            parts.append(f'<rect x="{sx}" y="{top+18}" width="{sw}" height="32" rx="5" fill="#e0e7ff" stroke="#6366f1"/>')
+            parts.append(f'<text x="{sx+2}" y="{top+29}" font-size="8" fill="#312e81">S{sb}</text>')
+            if dependencies is not None:
+                for input_bit, output_bit in dependencies[sb]:
+                    xi = x(sb * sbox_bits + input_bit)
+                    xo = x(sb * sbox_bits + output_bit)
+                    parts.append(f'<path d="M{xi},{top+18} C{xi},{top+30} {xo},{top+38} {xo},{top+50}" fill="none" stroke="#7c3aed" stroke-width="1" opacity="0.65"><title>S{sb}: bit {input_bit} influences bit {output_bit}</title></path>')
+        for bit in range(n):
+            parts.append(f'<path d="M{x(bit)},{top} V{top+18} M{x(bit)},{top+50} V{top+65}" stroke="#94a3b8" fill="none"/>')
+        pins(top+65, state.after_sbox if state is not None else None)
+        for out_bit, row in enumerate(p_rows):
+            for in_bit in range(n):
+                if row & (1 << in_bit):
+                    parts.append(f'<path d="M{x(in_bit)},{top+65} C{x(in_bit)},{top+105} {x(out_bit)},{top+125} {x(out_bit)},{top+155}" fill="none" stroke="#6366f1" stroke-width="1" opacity="0.45"><title>P: input {in_bit} ? output {out_bit}</title></path>')
+            if row.bit_count() > 1:
+                parts.append(f'<text x="{x(out_bit)}" y="{top+149}" text-anchor="middle" font-size="12" fill="#4338ca">?</text>')
+            parts.append(f'<path d="M{x(out_bit)},{top+155} V{top+210 if r < rounds-1 else top+177}" stroke="#94a3b8"/>')
+        pins(top+155, state.after_p if state is not None else None)
+    parts.append('</svg>')
+    return '\n'.join(parts)
+
+
+VERTICAL_SBOX_WIRING = True
