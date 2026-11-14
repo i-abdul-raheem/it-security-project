@@ -45,8 +45,14 @@ from spn_dc.ui_analysis import (
     render_path_search_tree_svg,
     render_sbox_differential_svg,
 )
+import spn_dc.ui_diagram as diagram_module
+
+if not getattr(diagram_module, "VERTICAL_SBOX_WIRING", False):
+    importlib.reload(diagram_module)
+
 from spn_dc.ui_diagram import (
     render_frame_bit_diagram_svg,
+    render_vertical_network_svg,
     render_sbox_to_p_layer_svg,
     render_spn_bit_diagram_svg,
 )
@@ -74,6 +80,20 @@ def _toast_once(message: str) -> None:
     if message not in seen:
         st.toast(message)
         seen.add(message)
+
+
+@st.dialog("Complete vertical network", width="large")
+def _show_vertical_network(sess: SPNSession) -> None:
+    if sess._p is None:
+        return
+    svg = render_vertical_network_svg(
+        rounds=sess._rounds, num_sboxes=sess._num_sboxes,
+        sbox_bits=sess._sbox_bits, p_rows=sess._p.rows,
+        sbox_tables=tuple(sb.table for sb in sess._sboxes),
+        trail=st.session_state.get("prop_trail"),
+    )
+    _download_svg(svg, filename="complete_vertical_network.svg", key="vertical_network_download")
+    st.image(svg, width="stretch")
 
 
 def _input_mode_index(cell) -> int:
@@ -436,7 +456,17 @@ doc.addEventListener('keydown', onTabChange);
     padding: 1.25rem 1.5rem 2rem;
     max-width: 1600px;
 }
-[data-testid="stSidebarUserContent"] { padding: 1.25rem 1rem; }
+[data-testid="stSidebarHeader"] {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.5rem;
+    height: 2rem;
+    margin-bottom: 0;
+    z-index: 1;
+}
+[data-testid="stSidebarHeader"] [data-testid="stLogoSpacer"] { display: none; }
+[data-testid="stSidebarUserContent"] { padding: 0.5rem 1rem 1.25rem; }
+[data-testid="stSidebarUserContent"] h2 { padding-right: 2rem; }
 [data-testid="stHeader"] { background: transparent; }
 [data-testid="stVerticalBlock"] { gap: 0.65rem; }
 [data-testid="stHorizontalBlock"] { gap: 1rem; min-width: 0; }
@@ -509,6 +539,10 @@ doc.addEventListener('keydown', onTabChange);
 [data-baseweb="tab"] { padding: 0.4rem 0.65rem; height: auto; }
 [role="tablist"] { scroll-margin-top: 3.75rem; }
 [data-testid="stImage"] img { max-width: 100%; max-height: 65vh; object-fit: contain; }
+[role="dialog"] [data-testid="stImage"] img {
+    max-height: none;
+    height: auto;
+}
 @media (max-width: 640px) {
     [data-testid="stMainBlockContainer"] { padding: 1rem 0.75rem 2rem; }
     [data-baseweb="tab"] { padding: 0.35rem 0.5rem; }
@@ -968,6 +1002,8 @@ doc.addEventListener('keydown', onTabChange);
 
     with tabs[4]:
         st.subheader("Propagate packed difference")
+        if st.button("Show whole network", key="show_vertical_network"):
+            _show_vertical_network(sess)
         packed = st.text_input("Packed Δx (hex or decimal)", value="0x11")
         if st.button("Propagate", type="primary"):
             try:
