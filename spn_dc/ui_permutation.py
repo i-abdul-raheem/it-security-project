@@ -121,7 +121,7 @@ def render_p_matrix_svg(
 ) -> str:
     """Heatmap: rows = output bits y, columns = input bits x; dark = coefficient 1."""
     n = len(p_rows)
-    label_w, label_h = 28, 22
+    label_w, label_h = 44, 60
     grid_w, grid_h = n * cell, n * cell
     width = label_w + grid_w + 40
     height = label_h + grid_h + 50
@@ -132,7 +132,7 @@ def render_p_matrix_svg(
         f'viewBox="0 0 {width} {height}" style="font-family:system-ui,sans-serif">',
         f'<text x="{width/2}" y="16" text-anchor="middle" font-size="12" font-weight="600" fill="#1e293b">'
         f"{html.escape(title)}</text>",
-        f'<text x="{ox + grid_w/2}" y="{oy - 6}" text-anchor="middle" font-size="10" fill="#64748b">input bit x (column)</text>',
+        f'<text x="{ox + grid_w/2}" y="{oy - 24}" text-anchor="middle" font-size="10" fill="#64748b">input bit x (column)</text>',
         f'<text x="12" y="{oy + grid_h/2}" font-size="10" fill="#64748b" transform="rotate(-90 12,{oy + grid_h/2})">'
         f"output y (row)</text>",
     ]
