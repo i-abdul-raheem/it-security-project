@@ -36,7 +36,8 @@ def render_ddt_heatmap_svg(
         return _svg_message(f"DDT heatmap hidden for size {n}; use the numeric table.")
     cell = max(10, min(26, 520 // n))
     label = 46
-    width = label + n * cell + 18
+    width = max(label + n * cell + 18, len(title) * 8 + 32, 240)
+    ox = (width - n * cell) / 2
     height = label + n * cell + 35
     peak = max(max(int(v) for v in row) for row in ddt) or 1
     parts = [
@@ -44,17 +45,17 @@ def render_ddt_heatmap_svg(
         f'viewBox="0 0 {width} {height}" style="font-family:system-ui,sans-serif">',
         f'<text x="{width / 2}" y="16" text-anchor="middle" font-size="12" '
         f'font-weight="700" fill="#1e293b">{html.escape(title)}</text>',
-        f'<text x="{label + n * cell / 2}" y="30" text-anchor="middle" font-size="9" fill="#64748b">output difference Δy</text>',
+        f'<text x="{ox + n * cell / 2}" y="30" text-anchor="middle" font-size="9" fill="#64748b">output difference Δy</text>',
     ]
     for col in range(n):
         parts.append(
-            f'<text x="{label + col * cell + cell / 2}" y="{label - 4}" text-anchor="middle" '
+            f'<text x="{ox + col * cell + cell / 2}" y="{label - 4}" text-anchor="middle" '
             f'font-size="7" fill="#64748b">{col:X}</text>'
         )
     for row, values in enumerate(ddt):
         cy = label + row * cell + cell / 2
         parts.append(
-            f'<text x="{label - 5}" y="{cy + 3}" text-anchor="end" font-size="7" fill="#64748b">{row:X}</text>'
+            f'<text x="{ox - 5}" y="{cy + 3}" text-anchor="end" font-size="7" fill="#64748b">{row:X}</text>'
         )
         for col, raw in enumerate(values):
             value = int(raw)
@@ -62,7 +63,7 @@ def render_ddt_heatmap_svg(
             lightness = int(96 - 49 * intensity)
             fill = f"hsl(245 72% {lightness}%)"
             text_fill = "#ffffff" if intensity >= 0.5 else "#334155"
-            x = label + col * cell
+            x = ox + col * cell
             y = label + row * cell
             selected = selected_input == row
             stroke = "#f97316" if selected else "#e2e8f0"
@@ -79,12 +80,12 @@ def render_ddt_heatmap_svg(
                     f'font-size="7" fill="{text_fill}">{value}</text>'
                 )
     parts.append(
-        f'<text x="12" y="{label + n * cell / 2}" font-size="9" fill="#64748b" '
-        f'transform="rotate(-90 12,{label + n * cell / 2})">input difference Δx</text>'
+        f'<text x="{ox - 30}" y="{label + n * cell / 2}" text-anchor="middle" font-size="9" fill="#64748b" '
+        f'transform="rotate(-90 {ox - 30},{label + n * cell / 2})">input difference Δx</text>'
     )
     if selected_input is not None:
         parts.append(
-            f'<text x="{label + n * cell / 2}" y="{height - 4}" text-anchor="middle" '
+            f'<text x="{ox + n * cell / 2}" y="{height - 4}" text-anchor="middle" '
             f'font-size="9" font-weight="700" fill="#ea580c">selected row: Δx = 0x{selected_input:X}</text>'
         )
     parts.append("</svg>")

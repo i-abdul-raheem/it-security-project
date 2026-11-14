@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import time
+import importlib
 
 # Keep UI session separate from CLI on-disk state by default.
 os.environ.setdefault("SPN_DC_NO_PERSIST", "1")
@@ -18,9 +19,15 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from spn_dc.difference import DiffKind
-from spn_dc.linear import identity_matrix, is_permutation_matrix
+from spn_dc.linear import identity_matrix
 from spn_dc.parsing import parse_int_list, parse_mapping, parse_matrix_rows
-from spn_dc.session import SPNSession, random_permutation_matrix, random_sbox
+import spn_dc.session as session_module
+
+# Streamlit can retain imported modules and session objects across source edits.
+if not getattr(session_module, "P_LAYER_SUPPORTS_XOR", False):
+    importlib.reload(session_module)
+
+from spn_dc.session import SPNSession, random_bijective_matrix, random_sbox
 from spn_dc.ui_analysis import (
     ddt_row_summary,
     ddt_summary,
@@ -80,6 +87,10 @@ def _input_mode_index(cell) -> int:
 def _sess() -> SPNSession:
     if "spn" not in st.session_state:
         st.session_state.spn = SPNSession()
+    elif type(st.session_state.spn) is not SPNSession:
+        refreshed = SPNSession()
+        refreshed.__dict__.update(vars(st.session_state.spn))
+        st.session_state.spn = refreshed
     return st.session_state.spn
 
 
@@ -161,7 +172,7 @@ def _sync_p_widget_state(sess: SPNSession) -> None:
 
 def _randomize_p_layer(sess: SPNSession) -> None:
     dim = sess._num_sboxes * sess._sbox_bits
-    sess.set_permutation(random_permutation_matrix(dim).rows)
+    sess.set_permutation(random_bijective_matrix(dim).rows)
     _sync_p_widget_state(sess)
     _clear_viz_state()
     st.session_state.p_randomized_notice = True
@@ -516,18 +527,6 @@ doc.addEventListener('keydown', onTabChange);
         st.session_state[key] = value
     editor_flash = st.session_state.pop("editor_flash", None)
 
-    # Repair an in-memory P-layer created by an older app version, which allowed
-    # general XOR matrices. Current P-layers are strictly one-to-one.
-    repaired_legacy_p = False
-    if sess._p is not None and not is_permutation_matrix(sess._p):
-        dim = sess._num_sboxes * sess._sbox_bits
-        sess._p = identity_matrix(dim)
-        sess._paths = ()
-        sess._paths_filtered = None
-        _clear_viz_state()
-        st.session_state[f"p_rows_{dim}"] = _p_rows_csv(sess)
-        repaired_legacy_p = True
-
     with st.sidebar:
         st.header("Cipher")
         dimension_defaults = {
@@ -568,10 +567,10 @@ doc.addEventListener('keydown', onTabChange);
                 st.toast("Create a cipher first.")
             else:
                 dim = sess._num_sboxes * sess._sbox_bits
-                m = random_permutation_matrix(dim)
+                m = random_bijective_matrix(dim)
                 sess.set_permutation(m.rows)
                 st.session_state[f"p_rows_{dim}"] = _p_rows_csv(sess)
-                st.toast("Random one-to-one bit permutation applied.")
+                st.toast("Random invertible XOR layer applied.")
 
         st.divider()
         st.subheader("Saved configuration")
@@ -615,11 +614,6 @@ doc.addEventListener('keydown', onTabChange);
         _toast_once("Use the sidebar to **Create / reset cipher** to begin.")
         return
 
-    if repaired_legacy_p:
-        st.toast(
-            "The previous many-connection P-layer was replaced with identity because "
-            "P-layers are now required to be one-to-one. Click **Random P-layer** for a shuffle."
-        )
     if editor_flash:
         st.toast(editor_flash)
 

@@ -17,11 +17,18 @@ def test_random_permutation_matrix_is_one_to_one():
     assert len(set(matrix.rows)) == matrix.dim
 
 
-def test_session_rejects_one_to_many_p_layer():
+def test_session_accepts_bijective_xor_p_layer():
     s = SPNSession()
     s.create_spn(1, 2, 2)
-    with pytest.raises(ValueError, match="one input connected to one output"):
-        s.set_permutation((0b0011, 0b0010, 0b0100, 0b1000))
+    rows = (0b0011, 0b0010, 0b0100, 0b1000)
+    s.set_permutation(rows)
+    assert s._p is not None
+    assert len({s._p.apply(x) for x in range(16)}) == 16
+    assert SPNSession.from_json(s.to_json())._p == s._p
+    for x in range(16):
+        assert s._p.inverse().apply(s._p.apply(x)) == x
+    with pytest.raises(ValueError, match="invertible"):
+        s.set_permutation((3, 3, 4, 8))
 
 
 def test_session_propagate_and_paths():
