@@ -61,6 +61,14 @@ from spn_dc.ui_viz import (
 )
 
 
+def _toast_once(message: str) -> None:
+    """Keep persistent guidance from reappearing on every widget rerun."""
+    seen = st.session_state.setdefault("seen_guidance_toasts", set())
+    if message not in seen:
+        st.toast(message)
+        seen.add(message)
+
+
 def _input_mode_index(cell) -> int:
     if cell.kind in (DiffKind.CONCRETE, DiffKind.ZERO):
         return 1
@@ -226,7 +234,7 @@ def _render_bit_diagram(
         )
     else:
         if len(frame.slices) != sess._num_sboxes:
-            st.warning(
+            st.toast(
                 "This animation belongs to an earlier cipher configuration. "
                 "Run propagation or generate a path again."
             )
@@ -265,7 +273,7 @@ def _render_propagation_animation(*, key_prefix: str = "viz", sess: SPNSession |
         or any(len(frame.slices) != sess._num_sboxes for frame in frames)
     ):
         _clear_viz_state()
-        st.warning(
+        st.toast(
             "The saved animation was cleared because the cipher configuration changed. "
             "Run propagation or generate a path again."
         )
@@ -427,6 +435,64 @@ doc.addEventListener('keydown', onTabChange);
 [data-testid="stApp"] h3 { font-size: 1.1rem; padding: 0.25rem 0; }
 [data-testid="stApp"] h4 { font-size: 1rem; padding: 0.25rem 0; }
 [data-testid="stMarkdownContainer"] p { margin-bottom: 0.4rem; }
+/* Scope overrides to toasts; retain Streamlit theme colors and close control. */
+[data-testid="stToast"] {
+    box-sizing: border-box;
+    width: min(24rem, calc(100vw - 2rem));
+    height: auto !important;
+    min-height: 0;
+    max-height: none !important;
+    padding: 0.875rem 1rem 1.125rem;
+    gap: 0.75rem;
+    align-items: flex-start;
+    overflow: visible !important;
+    font-family: system-ui, -apple-system, sans-serif;
+}
+[data-testid="stToast"] > div,
+[data-testid="stToast"] > div > div {
+    min-width: 0;
+    min-height: 0;
+    height: auto;
+    max-height: none;
+    overflow: visible;
+}
+[data-testid="stToastText"] {
+    display: block !important;
+    flex: 1 1 auto;
+    min-width: 0;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    -webkit-line-clamp: unset !important;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    color: inherit;
+}
+[data-testid="stToastText"] [data-testid="stMarkdownContainer"] {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    color: inherit;
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+[data-testid="stToastText"] p {
+    margin: 0;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+[data-testid="stToastText"] p + p { margin-top: 0.5rem; }
+[data-testid="stToastText"] :is(ul, ol) { margin-block: 0.25rem; }
+[data-testid="stToastText"] pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+[data-testid="stToastViewButton"] { display: none; }
+[data-testid="stToast"] button[aria-label="Close"] {
+    flex-shrink: 0;
+    align-self: flex-start;
+}
 [data-testid="stApp"] hr { margin: 0.65rem 0; }
 [data-baseweb="tab-list"] { gap: 0.25rem; flex-wrap: wrap; }
 [data-baseweb="tab"] { padding: 0.4rem 0.65rem; height: auto; }
@@ -489,23 +555,23 @@ doc.addEventListener('keydown', onTabChange);
                 st.session_state[key] = ",".join(str(x) for x in sb.table)
             dim = sess._num_sboxes * sess._sbox_bits
             st.session_state[f"p_rows_{dim}"] = _p_rows_csv(sess)
-            st.success("Cipher initialized (identity S-boxes + identity P).")
+            st.toast("Cipher initialized (identity S-boxes + identity P).")
         if st.button("Full reset (clear cipher)"):
             sess.reset()
             _clear_viz_state()
             st.session_state.pop("spn", None)
-            st.success("Cleared.")
+            st.toast("Cleared.")
         if st.button("Random P-layer"):
             try:
                 sess._require_cipher()
             except RuntimeError:
-                st.error("Create a cipher first.")
+                st.toast("Create a cipher first.")
             else:
                 dim = sess._num_sboxes * sess._sbox_bits
                 m = random_permutation_matrix(dim)
                 sess.set_permutation(m.rows)
                 st.session_state[f"p_rows_{dim}"] = _p_rows_csv(sess)
-                st.success("Random one-to-one bit permutation applied.")
+                st.toast("Random one-to-one bit permutation applied.")
 
         st.divider()
         st.subheader("Saved configuration")
@@ -514,7 +580,7 @@ doc.addEventListener('keydown', onTabChange);
             try:
                 imported = SPNSession.from_json(config_file.getvalue().decode("utf-8"))
             except (UnicodeDecodeError, ValueError, TypeError, KeyError) as exc:
-                st.error(f"Could not import configuration: {exc}")
+                st.toast(f"Could not import configuration: {exc}")
             else:
                 st.session_state.spn = imported
                 _clear_viz_state()
@@ -546,16 +612,16 @@ doc.addEventListener('keydown', onTabChange);
             )
 
     if not sess._sboxes:
-        st.info("Use the sidebar to **Create / reset cipher** to begin.")
+        _toast_once("Use the sidebar to **Create / reset cipher** to begin.")
         return
 
     if repaired_legacy_p:
-        st.warning(
+        st.toast(
             "The previous many-connection P-layer was replaced with identity because "
             "P-layers are now required to be one-to-one. Click **Random P-layer** for a shuffle."
         )
     if editor_flash:
-        st.success(editor_flash)
+        st.toast(editor_flash)
 
     dim = sess._num_sboxes * sess._sbox_bits
     config_p_layer = sess._p
@@ -610,9 +676,9 @@ doc.addEventListener('keydown', onTabChange);
                     try:
                         sess.set_sbox(i, parse_mapping(txt.replace("\n", "")))
                         _clear_viz_state()
-                        st.success(f"S-box {i} updated.")
+                        st.toast(f"S-box {i} updated.")
                     except ValueError as e:
-                        st.error(str(e))
+                        st.toast(str(e))
             if st.button("Randomize all S-boxes"):
                 for j in range(sess._num_sboxes):
                     sess.set_sbox(j, random_sbox(sess._sbox_bits).table)
@@ -639,9 +705,9 @@ doc.addEventListener('keydown', onTabChange);
                 try:
                     sess.set_permutation(parse_matrix_rows(prow.replace("\n", "")))
                     _clear_viz_state()
-                    st.success("P-layer updated.")
+                    st.toast("P-layer updated.")
                 except ValueError as e:
-                    st.error(str(e))
+                    st.toast(str(e))
             if st.button("Identity P"):
                 sess.set_permutation(identity_matrix(dim).rows)
                 st.session_state.pending_editor_values = {
@@ -680,11 +746,11 @@ doc.addEventListener('keydown', onTabChange);
                     download_key=f"save_sbox_{sid}_permutation",
                 )
             else:
-                st.info("Braid diagram hidden for large S-boxes; use the table above.")
+                _toast_once("Braid diagram hidden for large S-boxes; use the table above.")
 
         with ptab_p:
             if sess._p is None:
-                st.warning("No P-layer configured.")
+                _toast_once("No P-layer configured.")
             else:
                 rows = sess._p.rows
                 n = len(rows)
@@ -703,7 +769,7 @@ doc.addEventListener('keydown', onTabChange);
                     download_key="save_p_layer_matrix",
                 )
                 if is_pure_bit_permutation(rows):
-                    st.success("This P-layer is a **pure bit permutation** (wire shuffle).")
+                    _toast_once("This P-layer is a **pure bit permutation** (wire shuffle).")
                     pairs = bit_permutation_wiring(rows)
                     st.write("Wiring:", ", ".join(f"x{inp}->y{out}" for inp, out in pairs))
                     _show_perm_svg(
@@ -713,7 +779,7 @@ doc.addEventListener('keydown', onTabChange);
                         download_key="save_p_layer_bit_permutation",
                     )
                 else:
-                    st.info("General linear mix: each output bit XORs **several** input bits.")
+                    _toast_once("General linear mix: each output bit XORs **several** input bits.")
                 with st.expander("Row equations (GF(2))"):
                     for line in p_row_descriptions(rows):
                         st.code(line, language=None)
@@ -833,17 +899,17 @@ doc.addEventListener('keydown', onTabChange);
                     if st.button("Apply fixed", key=f"btn_in_fixed_{i}"):
                         sess.fix_input_difference(i, int(v))
                         _clear_viz_state()
-                        st.success("Saved.")
+                        st.toast("Saved.")
                 elif mode == "abstract":
                     if st.button("Set abstract", key=f"btn_in_abs_{i}"):
                         sess.set_abstract_difference(i)
                         _clear_viz_state()
-                        st.success("Saved.")
+                        st.toast("Saved.")
                 else:
                     if st.button("Set Any", key=f"btn_in_any_{i}"):
                         sess.set_input_any(i)
                         _clear_viz_state()
-                        st.success("Saved.")
+                        st.toast("Saved.")
         st.divider()
         st.subheader("Round-1 output difference fixes (after S-box)")
         of_cols = st.columns(sess._num_sboxes)
@@ -860,7 +926,7 @@ doc.addEventListener('keydown', onTabChange);
                     if st.button("Save", key=f"btn_out_fix_{i}"):
                         sess.fix_output_difference(i, int(ov))
                         _clear_viz_state()
-                        st.success("Saved.")
+                        st.toast("Saved.")
         st.divider()
         st.subheader("Equality on inputs")
         st.caption("One group per line, comma-separated indices (e.g. `0,2`). Replaces all groups on apply.")
@@ -876,23 +942,23 @@ doc.addEventListener('keydown', onTabChange);
                     g = _parse_equality_groups(eq_text)
                     sess.replace_equality_groups(g)
                     _clear_viz_state()
-                    st.success("Equality groups replaced.")
+                    st.toast("Equality groups replaced.")
                 except (ValueError, IndexError) as e:
-                    st.error(str(e))
+                    st.toast(str(e))
         with b2:
             if st.button("Clear equality groups"):
                 sess.replace_equality_groups(())
                 _clear_viz_state()
-                st.success("Cleared.")
+                st.toast("Cleared.")
         with b3:
             if st.button("Reset input cells to Any"):
                 sess.reset_input_cells()
                 _clear_viz_state()
-                st.success("Input cells cleared.")
+                st.toast("Input cells cleared.")
         if st.button("Clear output fixes"):
             sess.clear_output_fixes()
             _clear_viz_state()
-            st.success("Output fixes cleared.")
+            st.toast("Output fixes cleared.")
         st.markdown("#### Constraint diagram")
         _show_perm_svg(
             render_constraint_graph_svg(
@@ -913,15 +979,15 @@ doc.addEventListener('keydown', onTabChange);
             try:
                 dx = int(packed.strip(), 0)
             except ValueError:
-                st.error("Invalid integer.")
+                st.toast("Invalid integer.")
             else:
                 trail, err = sess.propagate_difference(dx)
                 if err or trail is None:
-                    st.error(err or "Propagation returned no trail.")
+                    st.toast(err or "Propagation returned no trail.")
                 else:
                     st.session_state.prop_trail = trail
                     _store_viz_frames(frames_from_trail(trail), sess._sbox_bits, f"Δx = {packed}")
-                    st.success(f"Propagated through {len(trail)} round(s). Use the animation below.")
+                    st.toast(f"Propagated through {len(trail)} round(s). Use the animation below.")
         if st.session_state.get("viz_frames"):
             _render_propagation_animation(key_prefix="prop", sess=sess)
             prop_trail = st.session_state.get("prop_trail")
@@ -946,13 +1012,13 @@ doc.addEventListener('keydown', onTabChange);
             try:
                 dx = int(p_in.strip(), 0)
             except ValueError:
-                st.error("Invalid integer.")
+                st.toast("Invalid integer.")
             else:
                 msg, err = sess.generate_paths(dx, max_paths=int(cap))
                 if err:
-                    st.error(err)
+                    st.toast(err)
                 else:
-                    st.success(msg)
+                    st.toast(msg)
         if sess._paths:
             st.metric("Paths stored", len(sess._paths))
             thr = st.number_input("Filter: keep probability >", min_value=0.0, max_value=1.0, value=0.0, step=1e-6)
@@ -960,12 +1026,12 @@ doc.addEventListener('keydown', onTabChange);
                 try:
                     sess.filter_paths(float(thr), strict=True)
                     n = len(sess._paths_filtered or ())
-                    st.success(f"{n} path(s) after filter.")
+                    st.toast(f"{n} path(s) after filter.")
                 except RuntimeError as e:
-                    st.error(str(e))
+                    st.toast(str(e))
             pool = list(sess._paths_filtered) if sess._paths_filtered is not None else list(sess._paths)
             if not pool:
-                st.warning(
+                st.toast(
                     "No trails match the current probability filter. "
                     "Set the threshold lower and click **Apply filter**, or generate paths again."
                 )
@@ -1015,7 +1081,7 @@ doc.addEventListener('keydown', onTabChange);
                         f"path id={p.path_id}  p={p.probability:.4g}",
                     )
                     st.session_state.prop_trail = None
-                    st.success("Trail loaded — animation below.")
+                    st.toast("Trail loaded — animation below.")
                 if st.session_state.get("viz_source", "").startswith("path id"):
                     _render_propagation_animation(key_prefix="path", sess=sess)
 
@@ -1025,7 +1091,7 @@ doc.addEventListener('keydown', onTabChange);
             if err or trail is None:
                 if st.session_state.get("viz_source") == "constraint check":
                     _clear_viz_state()
-                st.error(err)
+                st.toast(err)
                 _show_perm_svg(
                     render_constraint_graph_svg(
                         sess._input_cells,
@@ -1040,7 +1106,7 @@ doc.addEventListener('keydown', onTabChange);
             else:
                 st.session_state.prop_trail = trail
                 _store_viz_frames(frames_from_trail(trail), sess._sbox_bits, "constraint check")
-                st.success("All constraints are compatible with propagation.")
+                st.toast("All constraints are compatible with propagation.")
 
         # Keep this outside the button branch: every animation control causes a
         # Streamlit rerun, while the generated frames live in session state.
@@ -1098,7 +1164,7 @@ doc.addEventListener('keydown', onTabChange);
             _render_bit_diagram(sess, frames[step])
         else:
             _render_bit_diagram(sess, None)
-            st.info("Run **Propagate** or **Check constraints** to color active bit pins per layer.")
+            _toast_once("Run **Propagate** or **Check constraints** to color active bit pins per layer.")
 
 
 if __name__ == "__main__":
