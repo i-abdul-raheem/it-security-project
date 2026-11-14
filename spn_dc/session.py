@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from spn_dc.difference import DiffCell, DiffKind, cell_to_set
-from spn_dc.linear import BinaryMatrix, identity_matrix, is_permutation_matrix
+from spn_dc.linear import BinaryMatrix, identity_matrix
 from spn_dc.parsing import parse_mapping, parse_matrix_rows
 from spn_dc.paths import (
     DifferentialPath,
@@ -25,6 +25,8 @@ from spn_dc.propagation import (
 from spn_dc.sbox import SBox
 from spn_dc.spn import SPNParams, SPNRoundSpec
 
+P_LAYER_SUPPORTS_XOR = True
+
 
 def identity_sbox(bits: int) -> SBox:
     n = 1 << bits
@@ -39,6 +41,8 @@ def random_sbox(bits: int, rng: random.Random | None = None) -> SBox:
 
 
 def random_bijective_matrix(dim: int, rng: random.Random | None = None) -> BinaryMatrix:
+    if dim <= 0:
+        raise ValueError("dim must be positive")
     r = rng or random.Random()
     while True:
         rows = tuple(r.randrange(1 << dim) for _ in range(dim))
@@ -197,8 +201,6 @@ class SPNSession:
         if len(rows) != dim:
             raise ValueError("P-layer row count mismatch")
         p = BinaryMatrix(dim, rows)
-        if not is_permutation_matrix(p):
-            raise ValueError("P-layer must be a one-to-one bit permutation")
         s._p = p
         s._input_cells = [_cell_from_dict(x) for x in d["input_cells"]]
         s._output_fix = {int(k): int(v) for k, v in d.get("output_fix", {}).items()}
@@ -243,11 +245,6 @@ class SPNSession:
         if len(rows) != dim:
             raise ValueError(f"expected {dim} row masks for P-layer, got {len(rows)}")
         p = BinaryMatrix(dim, tuple(rows))
-        if not is_permutation_matrix(p):
-            raise ValueError(
-                "P-layer must have exactly one 1 in every row and column "
-                "(one input connected to one output)"
-            )
         self._p = p
         self._invalidate_paths()
         persist_session(self)
