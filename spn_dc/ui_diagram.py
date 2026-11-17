@@ -390,7 +390,7 @@ def render_vertical_network_svg(*, rounds: int, num_sboxes: int,
              f'width="{width}" height="{height}" style="font-family:system-ui,sans-serif">',
              '<rect width="100%" height="100%" fill="#ffffff"/>',
              f'<text x="{width/2}" y="22" text-anchor="middle" font-size="16" fill="#0f172a">Complete propagation network</text>',
-             f'<text x="{width/2}" y="42" text-anchor="middle" font-size="10" fill="#475569">Top to bottom ? P outputs XOR all incoming wires ? green = 1, gray = 0, amber = mixed</text>']
+             f'<text x="{width/2}" y="42" text-anchor="middle" font-size="6" fill="#475569">Top to bottom ? P outputs XOR all incoming wires ? green = 1, gray = 0, amber = mixed</text>']
     def pins(y, slices=None):
         states = pin_states_from_slices(slices, sbox_bits) if slices is not None else ['-'] * n
         for bit in range(n):
